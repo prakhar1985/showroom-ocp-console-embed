@@ -30,7 +30,7 @@ spec:
           namespace: {{ $.Values.demo.namespace | quote }}
           appName: {{ $.Values.demo.appName | quote }}
         showroom:
-          namespace: {{ $guid }}-user{{ $userNum }}
+          namespace: showroom-{{ $guid }}-user{{ $userNum }}
           {{- toYaml $shared | nindent 10 }}
   destination:
     server: {{ $.Values.argocd.destination.server }}
@@ -67,7 +67,7 @@ spec:
           namespace: {{ .Values.demo.namespace | quote }}
           appName: {{ .Values.demo.appName | quote }}
         showroom:
-          namespace: {{ $guid }}-admin
+          namespace: showroom-{{ $guid }}-admin
           {{- toYaml $shared | nindent 10 }}
   destination:
     server: {{ .Values.argocd.destination.server }}
