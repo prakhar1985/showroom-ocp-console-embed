@@ -23,6 +23,9 @@ demo:
 # N = N users (creates showroom-user1 through showroom-userN)
 numUsers: 1
 
+# User password (shared across all users, injected by AgnosticV)
+userPassword: ""
+
 # Component toggles
 components:
   showroom:

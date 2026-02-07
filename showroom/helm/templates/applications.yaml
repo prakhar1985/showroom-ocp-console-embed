@@ -3,6 +3,10 @@
 {{- /* Multi-user: create showroom-user1 through showroom-userN */}}
 {{- range $i := until (int $.Values.numUsers) }}
 {{- $userNum := add $i 1 }}
+{{- /* Merge per-user data into shared showroom values */}}
+{{- $shared := deepCopy (index $.Values.components.showroom.values "showroom") }}
+{{- $perUser := dict "user" (printf "user%d" (int $userNum)) "password" ($.Values.userPassword | default "") }}
+{{- $_ := set $shared "userdata" (merge $perUser (default dict $shared.userdata)) }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -26,9 +30,7 @@ spec:
           appName: {{ $.Values.demo.appName | quote }}
         showroom:
           namespace: showroom-user{{ $userNum }}
-          {{- with (index $.Values.components.showroom.values "showroom") }}
-          {{- toYaml . | nindent 10 }}
-          {{- end }}
+          {{- toYaml $shared | nindent 10 }}
   destination:
     server: {{ $.Values.argocd.destination.server }}
   syncPolicy:
@@ -38,6 +40,9 @@ spec:
 {{- end }}
 {{- else }}
 {{- /* Single admin user */}}
+{{- $shared := deepCopy (index .Values.components.showroom.values "showroom") }}
+{{- $perUser := dict "user" "admin" "password" (.Values.userPassword | default "") }}
+{{- $_ := set $shared "userdata" (merge $perUser (default dict $shared.userdata)) }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -61,9 +66,7 @@ spec:
           appName: {{ .Values.demo.appName | quote }}
         showroom:
           namespace: showroom-admin
-          {{- with (index .Values.components.showroom.values "showroom") }}
-          {{- toYaml . | nindent 10 }}
-          {{- end }}
+          {{- toYaml $shared | nindent 10 }}
   destination:
     server: {{ .Values.argocd.destination.server }}
   syncPolicy:
