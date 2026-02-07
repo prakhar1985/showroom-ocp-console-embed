@@ -2,60 +2,88 @@
 
 Deploys Showroom with an embedded OpenShift Console tab by stripping `X-Frame-Options` and `Content-Security-Policy` headers from the default IngressController and patching the OAuth route with reencrypt TLS -- all operators stay running, no ResourceQuotas, no CVO degradation.
 
-## Problem: The Current Approach Is Dangerous
+## Why This Approach Is More Secure
 
-Today, teams use the `ocp4_workload_showroom_ocp_integration` Ansible role to embed the OCP console in Showroom. Here's what it actually does:
+Both approaches strip `X-Frame-Options` and `Content-Security-Policy` from the default IngressController -- that is required for iframe embedding. The security improvement is everything else the old role (`ocp4_workload_showroom_ocp_integration`) does on top of that.
 
-### Step 1 -- Strip Security Headers Cluster-Wide
+### 1. Authentication Operator Stays Running
 
-Patches `IngressController/default` in `openshift-ingress-operator` to **delete** three response headers on **every route on the cluster**:
-- `X-Frame-Options` -- clickjacking protection
-- `Content-Security-Policy` -- resource loading control
-- `referrer-policy` -- referrer information leakage
+The old role **kills the authentication operator** (scales to 0) and blocks CVO from restarting it with a `ResourceQuota`. This means:
 
-### Step 2 -- Kill the Authentication Operator
+- If OAuth breaks during the lab, the cluster **cannot self-heal**. Users are locked out with no recovery path.
+- If someone accidentally deletes the OAuth route, no operator exists to recreate it. The cluster's authentication is permanently broken until manual intervention.
+- An attacker who gains access during this window faces no self-healing defenses on the authentication layer.
 
-- Scales `authentication-operator` to 0 replicas
-- Creates a `ResourceQuota` with `pods: "0"` to prevent CVO from restarting it
+Our approach **never touches the auth operator**. It stays running, continues reconciling, and can recover from failures. The cluster's authentication self-healing is fully intact.
 
-This is done because the auth operator would revert the OAuth route changes. Disabling it means the cluster can no longer self-heal its authentication configuration.
+### 2. No ResourceQuota Blocking CVO
 
-### Step 3 -- Reconfigure OAuth Routing
+The old role creates `ResourceQuota` with `pods: "0"` in `openshift-authentication-operator` to prevent CVO from restarting the auth operator. This:
 
-- Reads service CA from `ConfigMap/v4-0-config-system-service-ca`
-- Deletes and recreates `oauth-openshift` route with `reencrypt` TLS
+- Puts CVO in a **degraded state** -- it detects a missing operator and reports the cluster as unhealthy
+- Means CVO cannot remediate **any** authentication-related issue
+- Leaves a footprint that persists after the lab ends -- the next user inherits a degraded cluster
 
-### Why This Is Unacceptable
+Our approach creates **no ResourceQuotas**. CVO reports healthy. All operators can be managed normally.
 
-| Problem | Detail | Impact |
-|---------|--------|--------|
-| **Cluster-wide header stripping** | `IngressController/default` applies to ALL routes | Every application on the cluster loses clickjacking protection. Prometheus, Grafana, AlertManager, internal APIs -- all lose CSP. |
-| **Auth operator killed** | Scaled to 0 with ResourceQuota preventing restart | If OAuth breaks during the lab, there's no self-healing. CVO reports the cluster as degraded. |
-| **No rollback on destroy** | `remove_workload.yml` is debug-only | After the lab ends, the cluster still has headers stripped and auth operator dead. Next user gets a weakened cluster. |
-| **CVO conflict** | CVO tries to restore auth operator, gets blocked by ResourceQuota | Cluster reports degraded operator status, confusing for customers. |
+### 3. OAuth Route Patched, Not Destroyed
+
+The old role **deletes** the `oauth-openshift` route and recreates it from scratch. If anything goes wrong during recreation (network issue, partial apply, timing race), the OAuth route is gone and there's no operator to bring it back (because it was killed in step 2).
+
+Our approach **patches the existing route** in place with `--type=merge`. If the patch fails, the original route is untouched. The auth operator can still reconcile it.
+
+### 4. Fewer Headers Stripped
+
+The old role strips three headers: `X-Frame-Options`, `Content-Security-Policy`, **and `referrer-policy`**. Stripping `referrer-policy` leaks the full referrer URL (including paths and query parameters) to external sites for every route on the cluster. This can expose:
+
+- Internal dashboard URLs and paths
+- OAuth tokens in URL parameters
+- Internal hostnames and namespace names
+
+Our approach strips **only** `X-Frame-Options` and `Content-Security-Policy` -- the minimum needed for iframe embedding. `referrer-policy` stays intact.
+
+### 5. Clean Rollback via GitOps
+
+The old role's `remove_workload.yml` is tagged `debug` -- it never runs in production. After the lab ends, the cluster still has:
+- Headers stripped cluster-wide
+- Auth operator dead
+- ResourceQuota blocking recovery
+
+Our approach uses ArgoCD with `prune: true`. Delete the ArgoCD Application and all resources are removed. The IngressController patch is the only thing that needs manual revert (or a cleanup Job).
+
+### Security Comparison
+
+```
+OLD ROLE -- attack surface during lab:
+  [x] Auth operator dead -- no self-healing on OAuth
+  [x] CVO degraded -- cannot remediate auth issues
+  [x] OAuth route deleted/recreated -- risk of broken auth
+  [x] referrer-policy stripped -- URL leakage to external sites
+  [x] No rollback -- cluster stays weakened after lab
+
+NEW APPROACH -- attack surface during lab:
+  [ ] Auth operator running -- self-heals OAuth issues
+  [ ] CVO healthy -- full remediation capability
+  [ ] OAuth route patched in place -- fallback to original
+  [ ] referrer-policy intact -- no URL leakage
+  [ ] GitOps rollback -- delete app, resources pruned
+```
+
+## What the Old Role Does (and Why It's Dangerous)
+
+Today, teams use the `ocp4_workload_showroom_ocp_integration` Ansible role. Here's what it actually does:
+
+| Step | Action | Security Impact |
+|------|--------|-----------------|
+| 1 | Patch `IngressController/default` to delete `X-Frame-Options`, `Content-Security-Policy`, `referrer-policy` on **all routes** | Every app on the cluster loses clickjacking/CSP/referrer protection |
+| 2 | Scale `authentication-operator` to 0 + `ResourceQuota` `pods: "0"` | Cluster cannot self-heal authentication. CVO reports degraded. |
+| 3 | Delete and recreate `oauth-openshift` route with reencrypt TLS | Risky -- if recreation fails, OAuth is broken with no operator to fix it |
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  BROWSER                                                        │
-│                                                                 │
-│  ┌──────────────────────┐  ┌──────────────────────────────────┐ │
-│  │ Left Pane            │  │ Right Pane (iframe tabs)         │ │
-│  │ AsciiDoc lab content │  │                                  │ │
-│  │ rendered by Antora   │  │ <iframe src="https://console-   │ │
-│  │                      │  │  openshift-console.DOMAIN">     │ │
-│  │                      │  │                                  │ │
-│  │                      │  │ (direct browser fetch, NOT       │ │
-│  │                      │  │  proxied through Showroom)       │ │
-│  └──────────────────────┘  └───────────────┬──────────────────┘ │
-└────────────────────────────────────────────┼─────────────────────┘
-                                             │
-              ┌──────────────────────────────┘
-              │  Browser fetches console directly
-              ▼
-┌─────────────────────────────────────────────────────────────────┐
 │  OpenShift IngressController (default)                          │
 │                                                                 │
-│  OLD HACK: httpHeaders.actions DELETE on ALL routes:            │
+│  OLD ROLE: httpHeaders.actions DELETE on ALL routes:             │
 │    - X-Frame-Options     (clickjacking protection)              │
 │    - Content-Security-Policy  (resource loading control)        │
 │    - referrer-policy     (referrer leakage)                     │
