@@ -21,7 +21,7 @@ demo:
 # Multi-user support
 # 0 = single admin user (creates showroom-admin)
 # N = N users (creates showroom-user1 through showroom-userN)
-numUsers: 0
+numUsers: 1
 
 # Component toggles
 components:
