@@ -6,7 +6,7 @@ argocd:
     server: https://kubernetes.default.svc
 
 # Git repository (this repo)
-repoUrl: https://github.com/prakhar-srivastav/showroom-ocp-console-embed.git
+repoUrl: https://github.com/prakhar1985/showroom-ocp-console-embed.git
 revision: main
 
 # Deployer domain -- injected by RHDP at order time
