@@ -37,6 +37,8 @@ components:
         tabs:
           - name: OCP Console
             url: "https://console-openshift-console.${DOMAIN}"
+          - name: ArgoCD
+            url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
 
   ocpConsoleEmbed:
     enabled: true
