@@ -175,6 +175,51 @@ Pod: showroom
 └── Container: terminal    → port 7681 (optional, ttyd-based)
 ```
 
+## Multi-User Support
+
+Set `numUsers` in `values.yaml` or pass it at deploy time:
+
+| `numUsers` | Result |
+|------------|--------|
+| `0` (default) | Single `showroom-admin` instance |
+| `N` | `showroom-user1` through `showroom-userN`, each in its own namespace |
+
+In AgnosticV, `num_users` is passed as a parameter at order time (e.g., `num_users: 5` creates 5 Showroom instances). Each user gets their own namespace, pod, route, and PVC.
+
+```
+numUsers=0:
+  └── showroom-admin  (namespace: showroom-admin)
+
+numUsers=3:
+  ├── showroom-user1  (namespace: showroom-user1)
+  ├── showroom-user2  (namespace: showroom-user2)
+  └── showroom-user3  (namespace: showroom-user3)
+
+ocp-console-embed always runs once (cluster-level)
+```
+
+## Configurable Tabs
+
+Tabs are defined in `values.yaml` under `showroom.tabs`. When set, a ConfigMap is generated and mounted over the content repo's `ui-config.yml`, so you can add/remove tabs without forking the content repo.
+
+```yaml
+components:
+  showroom:
+    values:
+      showroom:
+        tabs:
+          - name: OCP Console
+            url: "https://console-openshift-console.${DOMAIN}"
+          - name: ArgoCD
+            url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
+          - name: Grafana
+            url: "https://grafana-open-cluster-management-observability.${DOMAIN}"
+```
+
+- `${DOMAIN}` is substituted at runtime by the Showroom content container
+- If `tabs: []` (empty), falls back to whatever the content repo has in its `ui-config.yml`
+- Tabs appear as iframe panels in the right pane of the Showroom UI
+
 ## Deployment
 
 Order from RHDP (`ocp-field-asset-cnv`) with:
@@ -192,14 +237,24 @@ Edit `showroom/helm/values.yaml` to:
 - Change the Showroom content repo (`components.showroom.values.showroom.content.repoUrl`)
 - Toggle components on/off (`components.showroom.enabled`, `components.ocpConsoleEmbed.enabled`)
 - Set deployer domain (injected by RHDP at order time)
+- Set `numUsers` for multi-user workshops
+- Configure `tabs` for custom iframe panels
 
 ## Local Verification
 
 ```bash
+# Single admin
 helm template showroom/helm \
   --set deployer.domain=apps.cluster.example.com \
   --set demo.namespace=demo \
   --set demo.appName=myapp
+
+# Multi-user (3 users)
+helm template showroom/helm \
+  --set deployer.domain=apps.cluster.example.com \
+  --set demo.namespace=demo \
+  --set demo.appName=myapp \
+  --set numUsers=3
 ```
 
 ## Post-Deploy Verification
@@ -215,7 +270,25 @@ curl -skI https://console-openshift-console.apps.DOMAIN | grep -i x-frame
 # Confirm operators are healthy
 oc get clusterversion
 oc get pods -n openshift-authentication-operator
+
+# Check multi-user namespaces
+oc get namespaces | grep showroom
 ```
+
+## Old vs New -- Full Comparison
+
+| Feature | Old (`ocp4_workload_showroom_ocp_integration`) | New (this repo) |
+|---------|-------|-----|
+| **Delivery** | Ansible role, runs once at provision | GitOps -- push to git, ArgoCD syncs |
+| **Header stripping** | Cluster-wide IC + referrer-policy | Cluster-wide IC (X-Frame-Options + CSP only) |
+| **Auth operator** | Killed (scale 0) | Running, untouched |
+| **ResourceQuota** | `pods: 0` blocking CVO | None |
+| **OAuth route** | Deleted and recreated | Patched in place (reencrypt TLS) |
+| **CVO status** | Degraded | Healthy |
+| **Rollback** | None (`remove_workload.yml` debug-only) | ArgoCD prune -- delete app, resources removed |
+| **Multi-user** | Ansible loop | `numUsers=N` generates N instances via App of Apps |
+| **Tabs** | Hardcoded in content repo | Configurable from Helm values |
+| **Content repo changes** | Required (fork/branch) | Optional -- tabs override from values |
 
 ## Experiment Log
 
