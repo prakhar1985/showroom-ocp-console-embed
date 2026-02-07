@@ -1,0 +1,35 @@
+{{- if .Values.components.showroom.enabled }}
+---
+# UserInfo ConfigMap for RHDP/Babylon integration
+# The ocp4_workload_gitops_bootstrap role discovers ConfigMaps with the
+# demo.redhat.com/userinfo label and reports data back to Babylon via
+# agnosticd_user_info. Users see these URLs in the RHDP portal.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: showroom-userinfo
+  namespace: openshift-gitops
+  labels:
+    demo.redhat.com/userinfo: ""
+data:
+  openshift_cluster_console_url: "https://console-openshift-console.{{ .Values.deployer.domain }}"
+  cluster_domain: {{ .Values.deployer.domain | quote }}
+  {{- if gt (int .Values.numUsers) 0 }}
+  # Multi-user: global URL points to user1, per-user URLs in users_json
+  showroom_primary_view_url: "https://showroom-showroom-user1.{{ .Values.deployer.domain }}"
+  users_json: |-
+    {
+      "users": {
+        {{- range $i := until (int $.Values.numUsers) }}
+        {{- $userNum := add $i 1 }}
+        "user{{ $userNum }}": {
+          "showroom_primary_view_url": "https://showroom-showroom-user{{ $userNum }}.{{ $.Values.deployer.domain }}"
+        }{{ if lt (int $userNum) (int $.Values.numUsers) }},{{ end }}
+        {{- end }}
+      }
+    }
+  {{- else }}
+  # Single admin user
+  showroom_primary_view_url: "https://showroom-showroom-admin.{{ .Values.deployer.domain }}"
+  {{- end }}
+{{- end }}

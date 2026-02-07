@@ -141,6 +141,19 @@ components:
 - If `tabs: []` (empty), the content repo's own `ui-config.yml` is used
 - Add or remove tabs by editing `values.yaml` and pushing -- ArgoCD syncs the change
 
+## User Info Reporting (Babylon Integration)
+
+After deployment, Showroom URLs are automatically reported back to the RHDP portal via the `ocp4_workload_gitops_bootstrap` role. A ConfigMap with the `demo.redhat.com/userinfo` label is created in `openshift-gitops`, and the bootstrap role discovers it and feeds the data to Babylon.
+
+| Mode | What gets reported |
+|------|-------------------|
+| Admin (`numUsers=0`) | Single `showroom_primary_view_url` for `showroom-admin` |
+| Multi-user (`numUsers=N`) | Per-user `showroom_primary_view_url` for each `showroom-userN` via `users_json` |
+
+Both modes also report `openshift_cluster_console_url` and `cluster_domain`.
+
+Users see their Showroom URL in the RHDP portal after ordering -- no manual lookup needed.
+
 ## Deployment
 
 Order from RHDP with:
@@ -195,3 +208,4 @@ oc get namespaces | grep showroom
 | **Multi-user** | Ansible loop | `numUsers=N` creates N instances via App of Apps |
 | **Tabs** | Hardcoded in content repo | Configurable from Helm values |
 | **Content repo changes needed** | Yes (fork or branch) | No -- tabs override from values |
+| **User info in RHDP portal** | Manual or custom Ansible | Automatic via `demo.redhat.com/userinfo` ConfigMap |
