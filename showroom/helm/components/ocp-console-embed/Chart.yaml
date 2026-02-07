@@ -1,5 +1,5 @@
 apiVersion: v2
 name: ocp-console-embed
-description: Per-route security header patching to allow OCP Console iframe embedding
+description: Patches default IngressController and OAuth route to allow OCP Console iframe embedding
 type: application
 version: 0.1.0

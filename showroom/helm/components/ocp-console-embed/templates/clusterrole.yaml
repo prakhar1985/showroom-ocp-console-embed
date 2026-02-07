@@ -3,15 +3,21 @@ kind: ClusterRole
 metadata:
   name: {{ .Values.ocpConsoleEmbed.name }}
 rules:
-  # Create routes in openshift-console and openshift-authentication
+  # Patch default IngressController to strip iframe-blocking headers
+  - apiGroups:
+      - operator.openshift.io
+    resources:
+      - ingresscontrollers
+    verbs:
+      - get
+      - patch
+  # Patch OAuth route with reencrypt TLS
   - apiGroups:
       - route.openshift.io
     resources:
       - routes
-      - routes/custom-host
     verbs:
       - get
-      - create
       - patch
   # Read service CA cert from openshift-authentication
   - apiGroups:
@@ -20,11 +26,3 @@ rules:
       - configmaps
     verbs:
       - get
-  # Add redirect URI to console OAuthClient
-  - apiGroups:
-      - oauth.openshift.io
-    resources:
-      - oauthclients
-    verbs:
-      - get
-      - patch

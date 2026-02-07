@@ -4,11 +4,6 @@ ocpConsoleEmbed:
   name: ocp-console-embed
   image: quay.io/openshift/origin-cli:latest
 
-  # Dedicated IngressController for iframe embedding
-  ingressController:
-    name: showroom-embed
-    replicas: 1
-
 # Injected by parent chart
 deployer:
   domain: ""
