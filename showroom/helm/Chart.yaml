@@ -1,0 +1,5 @@
+apiVersion: v2
+name: showroom-ocp-console-embed
+description: App of Apps chart for Showroom with OCP Console iframe embedding
+type: application
+version: 0.1.0

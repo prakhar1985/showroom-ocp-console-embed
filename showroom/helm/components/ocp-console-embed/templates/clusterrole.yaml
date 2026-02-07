@@ -1,0 +1,21 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.ocpConsoleEmbed.name }}
+rules:
+  # Patch routes in openshift-console and openshift-authentication
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes
+      - routes/custom-host
+    verbs:
+      - get
+      - patch
+  # Read service CA cert from openshift-authentication
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get

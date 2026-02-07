@@ -1,0 +1,34 @@
+# ArgoCD App of Apps configuration
+argocd:
+  namespace: openshift-gitops
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+
+# Git repository (this repo)
+repoUrl: https://github.com/prakhar-srivastav/showroom-ocp-console-embed.git
+revision: main
+
+# Deployer domain -- injected by RHDP at order time
+deployer:
+  domain: ""
+
+# Demo metadata -- injected by RHDP
+demo:
+  namespace: ""
+  appName: ""
+
+# Component toggles
+components:
+  showroom:
+    enabled: true
+    path: showroom/helm/components/showroom
+    values:
+      showroom:
+        content:
+          repoUrl: "https://github.com/rhpds/openshift-pipelines-demo-showroom.git"
+          repoRef: "main"
+
+  ocpConsoleEmbed:
+    enabled: true
+    path: showroom/helm/components/ocp-console-embed

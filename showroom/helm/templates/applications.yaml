@@ -1,0 +1,58 @@
+{{- if .Values.components.showroom.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: showroom
+  namespace: {{ .Values.argocd.namespace }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.argocd.project }}
+  source:
+    repoURL: {{ .Values.repoUrl }}
+    targetRevision: {{ .Values.revision }}
+    path: {{ .Values.components.showroom.path }}
+    helm:
+      valuesObject:
+        deployer:
+          domain: {{ .Values.deployer.domain | quote }}
+        demo:
+          namespace: {{ .Values.demo.namespace | quote }}
+          appName: {{ .Values.demo.appName | quote }}
+        {{- with .Values.components.showroom.values }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  destination:
+    server: {{ .Values.argocd.destination.server }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+{{- end }}
+{{- if .Values.components.ocpConsoleEmbed.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ocp-console-embed
+  namespace: {{ .Values.argocd.namespace }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.argocd.project }}
+  source:
+    repoURL: {{ .Values.repoUrl }}
+    targetRevision: {{ .Values.revision }}
+    path: {{ .Values.components.ocpConsoleEmbed.path }}
+    helm:
+      valuesObject:
+        deployer:
+          domain: {{ .Values.deployer.domain | quote }}
+  destination:
+    server: {{ .Values.argocd.destination.server }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+{{- end }}

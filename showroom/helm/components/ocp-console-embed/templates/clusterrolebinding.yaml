@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.ocpConsoleEmbed.name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Values.ocpConsoleEmbed.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.ocpConsoleEmbed.name }}
+    namespace: {{ .Values.ocpConsoleEmbed.namespace }}

@@ -1,0 +1,15 @@
+# OCP Console Embed configuration
+ocpConsoleEmbed:
+  namespace: ocp-console-embed
+  name: ocp-console-embed
+  image: quay.io/openshift/origin-cli:latest
+
+  # Verification settings
+  verify:
+    enabled: true
+    retries: 30
+    interval: 10
+
+# Injected by parent chart
+deployer:
+  domain: ""
