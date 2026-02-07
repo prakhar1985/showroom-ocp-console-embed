@@ -339,23 +339,31 @@ x-frame-options: DENY    ← still there
 
 **Conclusion:** Per-route httpHeaders on operator-managed routes do not survive reconciliation. Operators own these routes and revert any changes to `spec.httpHeaders`.
 
-### Attempt 2: Dedicated IngressController with Route Sharding (Failed on Single-Node)
+### Attempt 2: Dedicated IngressController with Route Sharding (Failed on All RHDP Clusters)
 
 Created a second IngressController (`showroom-embed`) with domain `*.embed.apps.DOMAIN` and `routeSelector.matchLabels.showroom-embed: "true"`. Custom routes (`console-embed`, `oauth-embed`) were created with the label so only the embed IC would serve them.
 
-**Problem:** On single-node RHDP clusters, the new router pod could not start because ports 80 and 443 were already bound by the default router:
+**Tested on two clusters:**
+
+**Single-node** (`cluster-gpzh2`): Router pod stuck Pending -- ports 80/443 already bound by default router:
 
 ```
-$ oc get pods -n openshift-ingress -l ingresscontroller.operator.openshift.io/deployment-ingresscontroller=showroom-embed
-NAME                              READY   STATUS    RESTARTS   AGE
-router-showroom-embed-...        0/1     Pending   0          5m
-
 Events:
   Warning  FailedScheduling  0/1 nodes are available:
     1 node(s) didn't have free ports for the requested pod ports.
 ```
 
-**Conclusion:** Dedicated IngressController requires additional nodes or `hostNetwork: false` configuration. Not viable for standard single-node RHDP deployments.
+**Multi-node** (`cluster-9mggj`, 3 control-plane + 2 workers): Tried three sub-approaches:
+
+1. **HostNetwork on workers** -- separated default IC (control-planes) and embed IC (workers). Embed IC started, but RHDP's external load balancer routes to ALL nodes. Moving default IC off workers caused 503s for original routes when LB hit a worker.
+
+2. **NodePortService** -- embed IC started on non-standard port (32557). Works technically, but browsers won't access `https://host:32557` in iframes. Non-standard ports are not viable for end users.
+
+3. **HostNetwork on all nodes** -- impossible. Two ICs can't share port 80/443 on the same node.
+
+**Root cause:** RHDP clusters use a single external LB with wildcard DNS (`*.apps.DOMAIN`) pointing to it. Both `*.apps.DOMAIN` and `*.embed.apps.DOMAIN` resolve to the same LB IP. There's no way to route traffic to different ICs based on subdomain without a separate LB or DNS entry, which RHDP doesn't support.
+
+**Conclusion:** Dedicated IngressController is not viable on any RHDP cluster topology -- the LB/DNS architecture doesn't support routing to a second IC.
 
 ### Attempt 3: Patch Default IngressController + OAuth Route (Working)
 
@@ -380,15 +388,24 @@ $ oc get clusterversion
 
 ### Comparison of All Approaches
 
-| Approach | Operators intact? | Default IC intact? | OAuth works? | Headers stripped? | Single-node? |
+| Approach | Operators intact? | Default IC intact? | OAuth works? | Headers stripped? | RHDP compatible? |
 |----------|:-:|:-:|:-:|:-:|:-:|
 | **Old role** (kill operator + IC patch) | No | No | Yes | Yes | Yes |
 | Per-route `spec.httpHeaders` patch | Yes | Yes | Yes | No (reverted) | Yes |
-| Dedicated IC + route sharding | Yes | Yes | Untested | Yes | **No** (port conflict) |
+| Dedicated IC + route sharding | Yes | Yes | Yes | Yes | **No** (LB/DNS) |
 | **Default IC patch + OAuth reencrypt** (this repo) | Yes | No | Yes | Yes | Yes |
+
+### Key Finding: Why Dedicated IngressController Doesn't Work on RHDP
+
+The dedicated IC approach is architecturally sound but incompatible with RHDP's infrastructure:
+
+1. **Port conflict**: Two HostNetwork ICs can't share the same node (both need port 80/443)
+2. **LB routing**: RHDP's external LB routes to all nodes. Separating ICs by node breaks default route traffic when the LB hits a node without the default IC
+3. **DNS**: Wildcard DNS `*.apps.DOMAIN` catches `*.embed.apps.DOMAIN` and resolves to the same LB IP. No way to route embed traffic to a different IC
+4. **NodePort**: Works but uses non-standard ports (e.g., :32557) that browsers won't use in iframe URLs
 
 ### Key Finding: Why Operators Are the Core Challenge
 
 The OpenShift console-operator and authentication-operator actively reconcile the routes they own (`Route/console`, `Route/oauth-openshift`). Any `spec.httpHeaders` added to these routes is wiped within seconds. The only reliable way to strip headers is at the **IngressController level**, which applies to all routes served by that IC.
 
-On multi-node clusters, a dedicated IC with route sharding would be the ideal solution (headers stripped only on embed routes). On single-node RHDP clusters, the default IC must be patched directly. The critical improvement over the old approach is that **operators stay running** -- no ResourceQuotas, no CVO degradation, no killed authentication operator.
+The critical improvement over the old approach is that **operators stay running** -- no ResourceQuotas, no CVO degradation, no killed authentication operator.
