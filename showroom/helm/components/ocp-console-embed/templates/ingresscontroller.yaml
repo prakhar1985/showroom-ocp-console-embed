@@ -1,0 +1,23 @@
+# Dedicated IngressController that strips iframe-blocking headers.
+# Only serves routes labeled showroom-embed=true.
+# Default IngressController stays untouched.
+apiVersion: operator.openshift.io/v1
+kind: IngressController
+metadata:
+  name: {{ .Values.ocpConsoleEmbed.ingressController.name }}
+  namespace: openshift-ingress-operator
+spec:
+  domain: embed.{{ .Values.deployer.domain }}
+  replicas: {{ .Values.ocpConsoleEmbed.ingressController.replicas }}
+  routeSelector:
+    matchLabels:
+      showroom-embed: "true"
+  httpHeaders:
+    actions:
+      response:
+        - name: X-Frame-Options
+          action:
+            type: Delete
+        - name: Content-Security-Policy
+          action:
+            type: Delete

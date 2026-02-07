@@ -3,7 +3,7 @@ kind: ClusterRole
 metadata:
   name: {{ .Values.ocpConsoleEmbed.name }}
 rules:
-  # Patch routes in openshift-console and openshift-authentication
+  # Create routes in openshift-console and openshift-authentication
   - apiGroups:
       - route.openshift.io
     resources:
@@ -11,6 +11,7 @@ rules:
       - routes/custom-host
     verbs:
       - get
+      - create
       - patch
   # Read service CA cert from openshift-authentication
   - apiGroups:
@@ -19,3 +20,11 @@ rules:
       - configmaps
     verbs:
       - get
+  # Add redirect URI to console OAuthClient
+  - apiGroups:
+      - oauth.openshift.io
+    resources:
+      - oauthclients
+    verbs:
+      - get
+      - patch

@@ -1,187 +1,201 @@
----
-# One-shot Job runs immediately on deploy to patch routes
+# One-time Job that creates custom routes on the embed IngressController
+# and patches the console OAuthClient to allow the embed hostname.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Values.ocpConsoleEmbed.name }}-initial
+  name: {{ .Values.ocpConsoleEmbed.name }}
   namespace: {{ .Values.ocpConsoleEmbed.namespace }}
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
-  backoffLimit: 3
+  backoffLimit: 5
   template:
     spec:
       serviceAccountName: {{ .Values.ocpConsoleEmbed.name }}
       restartPolicy: OnFailure
       containers:
-        - name: patch-routes
+        - name: setup-embed
           image: {{ .Values.ocpConsoleEmbed.image }}
           command:
             - /bin/bash
             - -ce
             - |
-              echo "=== OCP Console Embed: Initial Patch ==="
+              EMBED_DOMAIN="embed.{{ .Values.deployer.domain }}"
+              CONSOLE_EMBED_HOST="console-openshift-console.${EMBED_DOMAIN}"
+              OAUTH_EMBED_HOST="oauth-openshift.${EMBED_DOMAIN}"
 
-              # Step 1: Patch console route
-              echo "Patching Route/console in openshift-console..."
-              oc patch route console -n openshift-console --type=merge -p '{
-                "spec": {
-                  "httpHeaders": {
-                    "actions": {
-                      "response": [
-                        {"name": "X-Frame-Options", "action": {"type": "Delete"}},
-                        {"name": "Content-Security-Policy", "action": {"type": "Delete"}}
-                      ]
-                    }
-                  }
-                }
-              }'
+              echo "=== OCP Console Embed: Dedicated IngressController Setup ==="
+              echo "Embed domain: ${EMBED_DOMAIN}"
+              echo ""
 
-              # Step 2: Read service CA
-              echo "Reading service CA cert..."
+              # -------------------------------------------------------
+              # Step 1: Wait for embed IngressController to be ready
+              # -------------------------------------------------------
+              echo "Step 1: Waiting for IngressController/showroom-embed..."
+              for i in $(seq 1 60); do
+                AVAILABLE=$(oc get ingresscontroller {{ .Values.ocpConsoleEmbed.ingressController.name }} \
+                  -n openshift-ingress-operator \
+                  -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)
+                if [ "$AVAILABLE" = "True" ]; then
+                  echo "  IngressController ready."
+                  break
+                fi
+                echo "  Attempt $i/60: not ready, waiting 10s..."
+                sleep 10
+              done
+
+              # -------------------------------------------------------
+              # Step 2: Read service CA for reencrypt TLS
+              # -------------------------------------------------------
+              echo ""
+              echo "Step 2: Reading service CA cert..."
               SERVICE_CA=$(oc get configmap v4-0-config-system-service-ca \
                 -n openshift-authentication \
                 -o jsonpath='{.data.service-ca\.crt}' 2>/dev/null || true)
 
-              # Step 3: Patch oauth route
-              echo "Patching Route/oauth-openshift in openshift-authentication..."
-              if [ -n "$SERVICE_CA" ]; then
-                PATCH_FILE=$(mktemp)
-                cat > "$PATCH_FILE" <<PATCH_EOF
-              {
-                "spec": {
-                  "tls": {
-                    "termination": "reencrypt",
-                    "destinationCACertificate": $(echo "$SERVICE_CA" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-                  },
-                  "httpHeaders": {
-                    "actions": {
-                      "response": [
-                        {"name": "X-Frame-Options", "action": {"type": "Delete"}},
-                        {"name": "Content-Security-Policy", "action": {"type": "Delete"}}
-                      ]
-                    }
-                  }
-                }
-              }
-              PATCH_EOF
-                oc patch route oauth-openshift -n openshift-authentication \
-                  --type=merge -p "$(cat "$PATCH_FILE")"
-                rm -f "$PATCH_FILE"
+              if [ -z "$SERVICE_CA" ]; then
+                echo "  WARNING: Could not read service CA."
               else
-                oc patch route oauth-openshift -n openshift-authentication --type=merge -p '{
-                  "spec": {
-                    "httpHeaders": {
-                      "actions": {
-                        "response": [
-                          {"name": "X-Frame-Options", "action": {"type": "Delete"}},
-                          {"name": "Content-Security-Policy", "action": {"type": "Delete"}}
-                        ]
-                      }
-                    }
-                  }
-                }'
+                echo "  Service CA cert retrieved."
               fi
 
-              echo "=== Initial patch applied. CronJob will maintain it. ==="
----
-# CronJob re-applies patches every 2 minutes to counteract operator reconciliation.
-# Operators reconcile their routes and wipe spec.httpHeaders -- this puts them back.
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: {{ .Values.ocpConsoleEmbed.name }}
-  namespace: {{ .Values.ocpConsoleEmbed.namespace }}
-spec:
-  schedule: "{{ .Values.ocpConsoleEmbed.schedule }}"
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3
-  jobTemplate:
-    spec:
-      backoffLimit: 1
-      activeDeadlineSeconds: 90
-      template:
-        spec:
-          serviceAccountName: {{ .Values.ocpConsoleEmbed.name }}
-          restartPolicy: Never
-          containers:
-            - name: patch-routes
-              image: {{ .Values.ocpConsoleEmbed.image }}
-              command:
-                - /bin/bash
-                - -ce
-                - |
-                  # Check if console route already has httpHeaders patched
-                  CONSOLE_HEADERS=$(oc get route console -n openshift-console \
-                    -o jsonpath='{.spec.httpHeaders}' 2>/dev/null)
+              # -------------------------------------------------------
+              # Step 3: Create console-embed route
+              # -------------------------------------------------------
+              echo ""
+              echo "Step 3: Creating Route/console-embed in openshift-console..."
 
-                  if [ -z "$CONSOLE_HEADERS" ]; then
-                    echo "Console route missing httpHeaders -- re-patching..."
-                    oc patch route console -n openshift-console --type=merge -p '{
-                      "spec": {
-                        "httpHeaders": {
-                          "actions": {
-                            "response": [
-                              {"name": "X-Frame-Options", "action": {"type": "Delete"}},
-                              {"name": "Content-Security-Policy", "action": {"type": "Delete"}}
-                            ]
-                          }
-                        }
-                      }
-                    }'
+              # Get the destination CA from the original console route
+              CONSOLE_DEST_CA=$(oc get route console -n openshift-console \
+                -o jsonpath='{.spec.tls.destinationCACertificate}' 2>/dev/null || true)
+
+              CONSOLE_ROUTE_FILE=$(mktemp)
+              cat > "$CONSOLE_ROUTE_FILE" <<ROUTE_EOF
+              {
+                "apiVersion": "route.openshift.io/v1",
+                "kind": "Route",
+                "metadata": {
+                  "name": "console-embed",
+                  "namespace": "openshift-console",
+                  "labels": {
+                    "showroom-embed": "true"
+                  }
+                },
+                "spec": {
+                  "host": "${CONSOLE_EMBED_HOST}",
+                  "to": {
+                    "kind": "Service",
+                    "name": "console",
+                    "weight": 100
+                  },
+                  "port": {
+                    "targetPort": "https"
+                  },
+                  "tls": {
+                    "termination": "reencrypt",
+                    "insecureEdgeTerminationPolicy": "Redirect"
+                    $([ -n "$CONSOLE_DEST_CA" ] && echo ", \"destinationCACertificate\": $(echo "$CONSOLE_DEST_CA" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')")
+                  },
+                  "wildcardPolicy": "None"
+                }
+              }
+              ROUTE_EOF
+              oc apply -f "$CONSOLE_ROUTE_FILE" -n openshift-console 2>/dev/null || \
+                oc create -f "$CONSOLE_ROUTE_FILE" 2>/dev/null || \
+                echo "  Console-embed route already exists."
+              rm -f "$CONSOLE_ROUTE_FILE"
+              echo "  Console-embed route created: ${CONSOLE_EMBED_HOST}"
+
+              # -------------------------------------------------------
+              # Step 4: Create oauth-embed route
+              # -------------------------------------------------------
+              echo ""
+              echo "Step 4: Creating Route/oauth-embed in openshift-authentication..."
+
+              OAUTH_ROUTE_FILE=$(mktemp)
+              cat > "$OAUTH_ROUTE_FILE" <<ROUTE_EOF
+              {
+                "apiVersion": "route.openshift.io/v1",
+                "kind": "Route",
+                "metadata": {
+                  "name": "oauth-embed",
+                  "namespace": "openshift-authentication",
+                  "labels": {
+                    "showroom-embed": "true"
+                  }
+                },
+                "spec": {
+                  "host": "${OAUTH_EMBED_HOST}",
+                  "to": {
+                    "kind": "Service",
+                    "name": "oauth-openshift",
+                    "weight": 100
+                  },
+                  "port": {
+                    "targetPort": "6443"
+                  },
+                  "tls": {
+                    "termination": "reencrypt",
+                    "insecureEdgeTerminationPolicy": "Redirect"
+                    $([ -n "$SERVICE_CA" ] && echo ", \"destinationCACertificate\": $(echo "$SERVICE_CA" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')")
+                  },
+                  "wildcardPolicy": "None"
+                }
+              }
+              ROUTE_EOF
+              oc apply -f "$OAUTH_ROUTE_FILE" -n openshift-authentication 2>/dev/null || \
+                oc create -f "$OAUTH_ROUTE_FILE" 2>/dev/null || \
+                echo "  OAuth-embed route already exists."
+              rm -f "$OAUTH_ROUTE_FILE"
+              echo "  OAuth-embed route created: ${OAUTH_EMBED_HOST}"
+
+              # -------------------------------------------------------
+              # Step 5: Patch console OAuthClient with embed redirect URI
+              # -------------------------------------------------------
+              echo ""
+              echo "Step 5: Adding embed redirect URI to console OAuthClient..."
+
+              EMBED_REDIRECT="https://${CONSOLE_EMBED_HOST}"
+              EXISTING=$(oc get oauthclient console -o jsonpath='{.redirectURIs}' 2>/dev/null || true)
+
+              if echo "$EXISTING" | grep -q "$EMBED_REDIRECT"; then
+                echo "  Redirect URI already present."
+              else
+                # Add our redirect URI to the existing list
+                oc patch oauthclient console --type=json \
+                  -p "[{\"op\": \"add\", \"path\": \"/redirectURIs/-\", \"value\": \"${EMBED_REDIRECT}\"}]"
+                echo "  Added ${EMBED_REDIRECT} to console OAuthClient redirectURIs."
+              fi
+
+              # -------------------------------------------------------
+              # Step 6: Verify
+              # -------------------------------------------------------
+              echo ""
+              echo "Step 6: Verifying embed routes..."
+              echo ""
+              echo "Console embed: https://${CONSOLE_EMBED_HOST}"
+              echo "OAuth embed:   https://${OAUTH_EMBED_HOST}"
+              echo ""
+
+              for i in $(seq 1 30); do
+                HEADERS=$(curl -skI "https://${CONSOLE_EMBED_HOST}" 2>/dev/null || true)
+                if echo "$HEADERS" | grep -qi "x-frame-options"; then
+                  echo "  Attempt $i/30: X-Frame-Options still present, waiting 10s..."
+                  sleep 10
+                else
+                  if echo "$HEADERS" | grep -qi "HTTP"; then
+                    echo "  Console embed route is live and X-Frame-Options is gone."
+                    break
                   else
-                    echo "Console route httpHeaders intact."
+                    echo "  Attempt $i/30: route not responding yet, waiting 10s..."
+                    sleep 10
                   fi
+                fi
+              done
 
-                  # Check oauth route
-                  OAUTH_HEADERS=$(oc get route oauth-openshift -n openshift-authentication \
-                    -o jsonpath='{.spec.httpHeaders}' 2>/dev/null)
-
-                  if [ -z "$OAUTH_HEADERS" ]; then
-                    echo "OAuth route missing httpHeaders -- re-patching..."
-                    SERVICE_CA=$(oc get configmap v4-0-config-system-service-ca \
-                      -n openshift-authentication \
-                      -o jsonpath='{.data.service-ca\.crt}' 2>/dev/null || true)
-
-                    if [ -n "$SERVICE_CA" ]; then
-                      PATCH_FILE=$(mktemp)
-                      cat > "$PATCH_FILE" <<PATCH_EOF
-                    {
-                      "spec": {
-                        "tls": {
-                          "termination": "reencrypt",
-                          "destinationCACertificate": $(echo "$SERVICE_CA" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-                        },
-                        "httpHeaders": {
-                          "actions": {
-                            "response": [
-                              {"name": "X-Frame-Options", "action": {"type": "Delete"}},
-                              {"name": "Content-Security-Policy", "action": {"type": "Delete"}}
-                            ]
-                          }
-                        }
-                      }
-                    }
-              PATCH_EOF
-                      oc patch route oauth-openshift -n openshift-authentication \
-                        --type=merge -p "$(cat "$PATCH_FILE")"
-                      rm -f "$PATCH_FILE"
-                    else
-                      oc patch route oauth-openshift -n openshift-authentication --type=merge -p '{
-                        "spec": {
-                          "httpHeaders": {
-                            "actions": {
-                              "response": [
-                                {"name": "X-Frame-Options", "action": {"type": "Delete"}},
-                                {"name": "Content-Security-Policy", "action": {"type": "Delete"}}
-                              ]
-                            }
-                          }
-                        }
-                      }'
-                    fi
-                  else
-                    echo "OAuth route httpHeaders intact."
-                  fi
+              echo ""
+              echo "=== OCP Console Embed: Setup Complete ==="
+              echo ""
+              echo "Showroom ui-config.yml should use:"
+              echo "  url: 'https://console-openshift-console.embed.\${DOMAIN}'"

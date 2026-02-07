@@ -65,9 +65,9 @@ This is done because the auth operator would revert the OAuth route changes. Dis
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Solution: Per-Route Header Patching via GitOps
+## Solution: Dedicated IngressController with Route Sharding
 
-Instead of modifying the IngressController cluster-wide and killing operators, we patch **only the two routes that need it** using `spec.httpHeaders` on the route objects themselves.
+Instead of modifying the default IngressController or patching operator-managed routes, we create a **second IngressController** that strips headers and serve custom routes through it.
 
 ### Deployment Flow
 
@@ -79,26 +79,68 @@ RHDP Order (ocp-field-asset-cnv)
         ↓
 ArgoCD deploys App of Apps
   ├── App: showroom          (lab guide + terminal + OCP Console tab)
-  └── App: ocp-console-embed (Job patches routes per-route)
+  └── App: ocp-console-embed
+        ├── IngressController/showroom-embed  (strips headers, serves labeled routes)
+        ├── Job: create Route/console-embed   (custom route, label: showroom-embed=true)
+        ├── Job: create Route/oauth-embed     (custom route, label: showroom-embed=true)
+        └── Job: patch OAuthClient/console    (add embed redirect URI)
 
 Later: push to git → ArgoCD syncs → no re-order needed
 ```
 
-### What the Embed Job Does
+### How It Works
+
+```
+┌─────────────────────────────────────────────────┐
+│  IngressController: "default"                   │
+│  (UNTOUCHED -- all security headers ON)         │
+│  Domain: *.apps.DOMAIN                          │
+│  Serves: all routes (no routeSelector)          │
+│  Console, OAuth, Prometheus, etc. keep headers  │
+└─────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────┐
+│  IngressController: "showroom-embed"            │
+│  Domain: *.embed.apps.DOMAIN                    │
+│  routeSelector:                                 │
+│    matchLabels:                                 │
+│      showroom-embed: "true"                     │
+│  httpHeaders.actions:                           │
+│    DELETE X-Frame-Options                       │
+│    DELETE Content-Security-Policy               │
+│  Serves: ONLY labeled routes                    │
+│                                                 │
+│  Routes served:                                 │
+│    console-embed  → console service             │
+│    oauth-embed    → oauth-openshift service     │
+└─────────────────────────────────────────────────┘
+```
+
+### What the Setup Job Does
 
 | Step | Target | Change |
 |------|--------|--------|
-| 1 | `Route/console` in `openshift-console` | Delete `X-Frame-Options` + `Content-Security-Policy` via `spec.httpHeaders` |
-| 2 | `ConfigMap/v4-0-config-system-service-ca` in `openshift-authentication` | Read service CA cert |
-| 3 | `Route/oauth-openshift` in `openshift-authentication` | Add reencrypt TLS with service CA + delete security headers |
-| 4 | Verify | Poll console URL until `X-Frame-Options` is gone |
+| 1 | `IngressController/showroom-embed` | Wait for it to become Available (created declaratively) |
+| 2 | `ConfigMap/v4-0-config-system-service-ca` | Read service CA cert for reencrypt TLS |
+| 3 | `Route/console-embed` in `openshift-console` | Create custom route with label `showroom-embed=true`, reencrypt TLS |
+| 4 | `Route/oauth-embed` in `openshift-authentication` | Create custom route with label `showroom-embed=true`, reencrypt TLS + service CA |
+| 5 | `OAuthClient/console` | Add embed redirect URI so OAuth login works via the embed hostname |
+| 6 | Verify | Poll embed console URL until responding without `X-Frame-Options` |
 
 ### What It Does NOT Do (vs the Current Insecure Role)
 
-- Does NOT modify `IngressController/default` -- only the two specific routes
-- Does NOT disable the authentication operator -- operator stays running and healthy
+- Does NOT modify `IngressController/default` -- default IC stays untouched
+- Does NOT modify operator-managed routes -- custom routes are independent
+- Does NOT disable the authentication operator -- operator stays running
 - Does NOT create ResourceQuotas blocking operator pods -- CVO stays happy
 - `oc get clusterversion` stays clean, no degraded operators
+
+### Why This Works (and per-route patching doesn't)
+
+Operators reconcile routes they **own** (`Route/console`, `Route/oauth-openshift`) and wipe any custom `spec.httpHeaders`. But operators do NOT touch:
+- Custom routes they didn't create (`Route/console-embed`, `Route/oauth-embed`)
+- The IngressController's `spec.httpHeaders` (managed by ingress-operator, which preserves user config)
+- Additional entries in OAuthClient `redirectURIs` (needs testing)
 
 ### Old vs New Comparison
 
@@ -115,21 +157,22 @@ OLD (ocp4_workload_showroom_ocp_integration):
 │  Affects: EVERY route on the cluster    │
 └─────────────────────────────────────────┘
 
-NEW (this repo -- per-route patching):
+NEW (this repo -- dedicated IngressController):
 ┌─────────────────────────────────────────┐
 │  IngressController: "default"           │
 │  (UNTOUCHED - all security headers ON)  │
 │                                         │
-│  Route/console:                         │
-│    spec.httpHeaders → DELETE X-Frame,   │
-│                       DELETE CSP        │
-│  Route/oauth-openshift:                 │
-│    spec.httpHeaders → DELETE X-Frame,   │
-│                       DELETE CSP        │
-│    spec.tls → reencrypt with service CA │
+│  IngressController: "showroom-embed"    │
+│    DELETE X-Frame-Options               │
+│    DELETE Content-Security-Policy       │
+│    routeSelector: showroom-embed=true   │
+│                                         │
+│  Route/console-embed → console svc      │
+│  Route/oauth-embed   → oauth svc       │
+│  (custom routes, not operator-managed)  │
 │                                         │
 │  auth-operator: RUNNING (untouched)     │
-│  Affects: ONLY 2 routes                 │
+│  Affects: ONLY embed routes             │
 └─────────────────────────────────────────┘
 ```
 
@@ -186,17 +229,27 @@ helm template showroom/helm \
 # Check ArgoCD apps
 oc get applications -n openshift-gitops
 
-# Verify X-Frame-Options removed
-curl -sI https://console-openshift-console.apps.DOMAIN | grep -i x-frame
+# Verify embed IngressController is running
+oc get ingresscontroller showroom-embed -n openshift-ingress-operator
+
+# Verify embed routes exist
+oc get route console-embed -n openshift-console
+oc get route oauth-embed -n openshift-authentication
+
+# Verify X-Frame-Options removed on embed route (NOT the original)
+curl -skI https://console-openshift-console.embed.apps.DOMAIN | grep -i x-frame
+
+# Original routes should still have headers (untouched)
+curl -skI https://console-openshift-console.apps.DOMAIN | grep -i x-frame
 
 # Confirm operators are healthy
 oc get clusterversion
 oc get pods -n openshift-authentication-operator
 ```
 
-## Experiment Results
+## Experiment Log
 
-### Finding: Operators Reconcile Per-Route `spec.httpHeaders`
+### Attempt 1: Per-Route `spec.httpHeaders` (Failed)
 
 **Tested on:** OCP 4.x cluster via RHDP (`cluster-gpzh2.dynamic.redhatworkshops.io`)
 
@@ -213,31 +266,18 @@ $ curl -skI https://console-openshift-console.apps.DOMAIN | grep -i x-frame
 x-frame-options: DENY    ← still there
 ```
 
-### Why Dedicated IngressController Won't Work Either
+**Conclusion:** Per-route httpHeaders on operator-managed routes do not survive reconciliation.
 
-A dedicated IngressController with route sharding (our first choice) has an **OAuth redirect problem**: the console's OAuthClient is hardcoded to redirect to `console-openshift-console.apps.DOMAIN`. Custom routes on a different IC domain (`*.embed.apps.DOMAIN`) would break the login flow. Modifying the OAuthClient gets reverted by the console-operator.
+### Attempt 2: Dedicated IngressController (Current Approach)
 
-### Solution: CronJob
+Instead of modifying operator-managed routes, we create **custom routes** (`console-embed`, `oauth-embed`) on a **dedicated IngressController** (`showroom-embed`). Operators don't know about these routes and won't reconcile them. The IC-level header stripping handles the rest.
 
-The ocp-console-embed component now uses a **CronJob** (every 2 minutes) that:
-
-1. Checks if `spec.httpHeaders` is still present on both routes
-2. Only re-patches if the operator has wiped it
-3. Keeps the auth operator **running and healthy** (no kill, no ResourceQuota)
-
-```
-Operator reconciles route    →  httpHeaders wiped
-CronJob runs (≤2 min later)  →  httpHeaders re-applied
-Router reloads               →  X-Frame-Options gone from response
-```
-
-**Trade-off:** There's a brief window (up to 2 min) after operator reconciliation where headers are present and the iframe won't render. For a lab/demo environment this is acceptable. Adjust `schedule` in `values.yaml` to run more frequently if needed.
+**Open question:** Does the console-operator reconcile the `console` OAuthClient's `redirectURIs` and remove our embed entry? Needs testing.
 
 ### Comparison of All Approaches
 
-| Approach | Operators intact? | IngressController intact? | OAuth flow works? | Headers always stripped? |
+| Approach | Operators intact? | Default IC intact? | OAuth flow works? | Headers always stripped? |
 |----------|:-:|:-:|:-:|:-:|
 | **Old role** (cluster-wide IC + kill operator) | No | No | Yes | Yes |
 | Per-route patch (one-shot Job) | Yes | Yes | Yes | No (reverted) |
-| Dedicated IngressController + route sharding | Yes | Yes | **No** (OAuth redirect breaks) | Yes |
-| **CronJob** (this repo) | Yes | Yes | Yes | ~Yes (≤2 min gap) |
+| **Dedicated IC + custom routes** (this repo) | Yes | Yes | Needs testing | Yes |
