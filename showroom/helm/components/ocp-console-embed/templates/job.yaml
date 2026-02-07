@@ -65,10 +65,25 @@ spec:
               echo "  IngressController/default patched."
 
               # -------------------------------------------------------
-              # Step 2: Read service CA for OAuth route reencrypt TLS
+              # Step 2: Set auth operator to Unmanaged
+              # -------------------------------------------------------
+              # The auth operator reverts the OAuth route to passthrough within
+              # seconds (watch-based reconciliation). Setting Unmanaged stops
+              # reconciliation so the reencrypt patch sticks. The operator pod
+              # stays running, CVO stays healthy, OAuth continues to work.
+              echo ""
+              echo "Step 2: Setting authentication operator to Unmanaged..."
+
+              oc patch authentication.operator.openshift.io cluster \
+                --type=merge \
+                -p '{"spec":{"managementState":"Unmanaged"}}'
+              echo "  Authentication operator set to Unmanaged."
+
+              # -------------------------------------------------------
+              # Step 3: Read service CA for OAuth route reencrypt TLS
               # -------------------------------------------------------
               echo ""
-              echo "Step 2: Reading service CA cert..."
+              echo "Step 3: Reading service CA cert..."
 
               SERVICE_CA=$(oc get configmap v4-0-config-system-service-ca \
                 -n openshift-authentication \
@@ -81,10 +96,10 @@ spec:
               fi
 
               # -------------------------------------------------------
-              # Step 3: Patch OAuth route with reencrypt TLS
+              # Step 4: Patch OAuth route with reencrypt TLS
               # -------------------------------------------------------
               echo ""
-              echo "Step 3: Patching Route/oauth-openshift with reencrypt TLS..."
+              echo "Step 4: Patching Route/oauth-openshift with reencrypt TLS..."
 
               if [ -n "$SERVICE_CA" ]; then
                 # Build the patch JSON with service CA for reencrypt
@@ -114,10 +129,10 @@ spec:
               fi
 
               # -------------------------------------------------------
-              # Step 4: Verify X-Frame-Options is gone (Console)
+              # Step 5: Verify X-Frame-Options is gone (Console)
               # -------------------------------------------------------
               echo ""
-              echo "Step 4: Verifying console X-Frame-Options is stripped..."
+              echo "Step 5: Verifying console X-Frame-Options is stripped..."
               echo "  Console URL: https://${CONSOLE_HOST}"
 
               for i in $(seq 1 30); do
@@ -137,10 +152,10 @@ spec:
               done
 
               # -------------------------------------------------------
-              # Step 5: Verify OAuth route
+              # Step 6: Verify OAuth route
               # -------------------------------------------------------
               echo ""
-              echo "Step 5: Checking OAuth route status..."
+              echo "Step 6: Checking OAuth route status..."
               OAUTH_TLS=$(oc get route oauth-openshift -n openshift-authentication \
                 -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)
               echo "  OAuth route TLS termination: ${OAUTH_TLS}"

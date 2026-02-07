@@ -31,6 +31,16 @@ rules:
     verbs:
       - create
       - update
+  # Set authentication operator to Unmanaged so it stops reverting the OAuth route
+  - apiGroups:
+      - operator.openshift.io
+    resources:
+      - authentications
+    resourceNames:
+      - cluster
+    verbs:
+      - get
+      - patch
   # Read service CA cert from openshift-authentication
   - apiGroups:
       - ""
