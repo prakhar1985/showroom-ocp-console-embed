@@ -4,11 +4,10 @@ ocpConsoleEmbed:
   name: ocp-console-embed
   image: quay.io/openshift/origin-cli:latest
 
-  # Verification settings
-  verify:
-    enabled: true
-    retries: 30
-    interval: 10
+  # CronJob schedule -- how often to re-apply patches.
+  # Operators reconcile their routes and wipe httpHeaders;
+  # the CronJob puts them back.
+  schedule: "*/2 * * * *"
 
 # Injected by parent chart
 deployer:

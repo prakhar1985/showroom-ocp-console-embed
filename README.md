@@ -194,6 +194,50 @@ oc get clusterversion
 oc get pods -n openshift-authentication-operator
 ```
 
-## Experiment Notes
+## Experiment Results
 
-If OCP operators revert the `httpHeaders` on the routes, switch the Job to a CronJob (every 5 min) or fall back to a dedicated IngressController with route sharding for the console routes.
+### Finding: Operators Reconcile Per-Route `spec.httpHeaders`
+
+**Tested on:** OCP 4.x cluster via RHDP (`cluster-gpzh2.dynamic.redhatworkshops.io`)
+
+We applied `spec.httpHeaders` patches directly to the `console` and `oauth-openshift` routes. The patches applied successfully, but within seconds the **console-operator** and **authentication-operator** reconciled their routes and **wiped the `httpHeaders` field**.
+
+```
+$ oc patch route console -n openshift-console --type=merge -p '{...httpHeaders...}'
+route.route.openshift.io/console patched
+
+$ oc get route console -n openshift-console -o jsonpath='{.spec.httpHeaders}'
+  (empty -- operator reverted it)
+
+$ curl -skI https://console-openshift-console.apps.DOMAIN | grep -i x-frame
+x-frame-options: DENY    ← still there
+```
+
+### Why Dedicated IngressController Won't Work Either
+
+A dedicated IngressController with route sharding (our first choice) has an **OAuth redirect problem**: the console's OAuthClient is hardcoded to redirect to `console-openshift-console.apps.DOMAIN`. Custom routes on a different IC domain (`*.embed.apps.DOMAIN`) would break the login flow. Modifying the OAuthClient gets reverted by the console-operator.
+
+### Solution: CronJob
+
+The ocp-console-embed component now uses a **CronJob** (every 2 minutes) that:
+
+1. Checks if `spec.httpHeaders` is still present on both routes
+2. Only re-patches if the operator has wiped it
+3. Keeps the auth operator **running and healthy** (no kill, no ResourceQuota)
+
+```
+Operator reconciles route    →  httpHeaders wiped
+CronJob runs (≤2 min later)  →  httpHeaders re-applied
+Router reloads               →  X-Frame-Options gone from response
+```
+
+**Trade-off:** There's a brief window (up to 2 min) after operator reconciliation where headers are present and the iframe won't render. For a lab/demo environment this is acceptable. Adjust `schedule` in `values.yaml` to run more frequently if needed.
+
+### Comparison of All Approaches
+
+| Approach | Operators intact? | IngressController intact? | OAuth flow works? | Headers always stripped? |
+|----------|:-:|:-:|:-:|:-:|
+| **Old role** (cluster-wide IC + kill operator) | No | No | Yes | Yes |
+| Per-route patch (one-shot Job) | Yes | Yes | Yes | No (reverted) |
+| Dedicated IngressController + route sharding | Yes | Yes | **No** (OAuth redirect breaks) | Yes |
+| **CronJob** (this repo) | Yes | Yes | Yes | ~Yes (≤2 min gap) |
