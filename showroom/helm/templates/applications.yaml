@@ -1,9 +1,48 @@
 {{- if .Values.components.showroom.enabled }}
+{{- if gt (int .Values.numUsers) 0 }}
+{{- /* Multi-user: create showroom-user1 through showroom-userN */}}
+{{- range $i := until (int $.Values.numUsers) }}
+{{- $userNum := add $i 1 }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: showroom
+  name: showroom-user{{ $userNum }}
+  namespace: {{ $.Values.argocd.namespace }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ $.Values.argocd.project }}
+  source:
+    repoURL: {{ $.Values.repoUrl }}
+    targetRevision: {{ $.Values.revision }}
+    path: {{ $.Values.components.showroom.path }}
+    helm:
+      valuesObject:
+        deployer:
+          domain: {{ $.Values.deployer.domain | quote }}
+        demo:
+          namespace: {{ $.Values.demo.namespace | quote }}
+          appName: {{ $.Values.demo.appName | quote }}
+        showroom:
+          namespace: showroom-user{{ $userNum }}
+          {{- with (index $.Values.components.showroom.values "showroom") }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+  destination:
+    server: {{ $.Values.argocd.destination.server }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+{{- end }}
+{{- else }}
+{{- /* Single admin user */}}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: showroom-admin
   namespace: {{ .Values.argocd.namespace }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -20,15 +59,18 @@ spec:
         demo:
           namespace: {{ .Values.demo.namespace | quote }}
           appName: {{ .Values.demo.appName | quote }}
-        {{- with .Values.components.showroom.values }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        showroom:
+          namespace: showroom-admin
+          {{- with (index .Values.components.showroom.values "showroom") }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
   destination:
     server: {{ .Values.argocd.destination.server }}
   syncPolicy:
     automated:
       selfHeal: true
       prune: true
+{{- end }}
 {{- end }}
 {{- if .Values.components.ocpConsoleEmbed.enabled }}
 ---
