@@ -2,17 +2,89 @@
 
 Deploys Showroom with an embedded OpenShift Console tab using a **per-route** approach that strips `X-Frame-Options` and `Content-Security-Policy` headers from the console and OAuth routes only -- without modifying the IngressController or disabling operators.
 
-## Architecture
+## Problem: The Current Approach Is Dangerous
 
-ArgoCD App of Apps deployed from `showroom/helm`:
+Today, teams use the `ocp4_workload_showroom_ocp_integration` Ansible role to embed the OCP console in Showroom. Here's what it actually does:
+
+### Step 1 -- Strip Security Headers Cluster-Wide
+
+Patches `IngressController/default` in `openshift-ingress-operator` to **delete** three response headers on **every route on the cluster**:
+- `X-Frame-Options` -- clickjacking protection
+- `Content-Security-Policy` -- resource loading control
+- `referrer-policy` -- referrer information leakage
+
+### Step 2 -- Kill the Authentication Operator
+
+- Scales `authentication-operator` to 0 replicas
+- Creates a `ResourceQuota` with `pods: "0"` to prevent CVO from restarting it
+
+This is done because the auth operator would revert the OAuth route changes. Disabling it means the cluster can no longer self-heal its authentication configuration.
+
+### Step 3 -- Reconfigure OAuth Routing
+
+- Reads service CA from `ConfigMap/v4-0-config-system-service-ca`
+- Deletes and recreates `oauth-openshift` route with `reencrypt` TLS
+
+### Why This Is Unacceptable
+
+| Problem | Detail | Impact |
+|---------|--------|--------|
+| **Cluster-wide header stripping** | `IngressController/default` applies to ALL routes | Every application on the cluster loses clickjacking protection. Prometheus, Grafana, AlertManager, internal APIs -- all lose CSP. |
+| **Auth operator killed** | Scaled to 0 with ResourceQuota preventing restart | If OAuth breaks during the lab, there's no self-healing. CVO reports the cluster as degraded. |
+| **No rollback on destroy** | `remove_workload.yml` is debug-only | After the lab ends, the cluster still has headers stripped and auth operator dead. Next user gets a weakened cluster. |
+| **CVO conflict** | CVO tries to restore auth operator, gets blocked by ResourceQuota | Cluster reports degraded operator status, confusing for customers. |
 
 ```
-ArgoCD
-├── App: showroom          (lab guide + terminal + OCP Console tab)
-└── App: ocp-console-embed (Job patches routes per-route)
+┌─────────────────────────────────────────────────────────────────┐
+│  BROWSER                                                        │
+│                                                                 │
+│  ┌──────────────────────┐  ┌──────────────────────────────────┐ │
+│  │ Left Pane            │  │ Right Pane (iframe tabs)         │ │
+│  │ AsciiDoc lab content │  │                                  │ │
+│  │ rendered by Antora   │  │ <iframe src="https://console-   │ │
+│  │                      │  │  openshift-console.DOMAIN">     │ │
+│  │                      │  │                                  │ │
+│  │                      │  │ (direct browser fetch, NOT       │ │
+│  │                      │  │  proxied through Showroom)       │ │
+│  └──────────────────────┘  └───────────────┬──────────────────┘ │
+└────────────────────────────────────────────┼─────────────────────┘
+                                             │
+              ┌──────────────────────────────┘
+              │  Browser fetches console directly
+              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  OpenShift IngressController (default)                          │
+│                                                                 │
+│  CURRENT HACK: httpHeaders.actions DELETE on ALL routes:        │
+│    - X-Frame-Options     (clickjacking protection)              │
+│    - Content-Security-Policy  (resource loading control)        │
+│    - referrer-policy     (referrer leakage)                     │
+│                                                                 │
+│  ALSO: authentication-operator scaled to 0 + ResourceQuota      │
+│        to prevent operator from reverting OAuth route changes    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### What the embed Job does
+## Solution: Per-Route Header Patching via GitOps
+
+Instead of modifying the IngressController cluster-wide and killing operators, we patch **only the two routes that need it** using `spec.httpHeaders` on the route objects themselves.
+
+### Deployment Flow
+
+```
+RHDP Order (ocp-field-asset-cnv)
+  → GitOps Repo: github.com/prakhar1985/showroom-ocp-console-embed
+  → Revision: main
+  → Path: showroom/helm
+        ↓
+ArgoCD deploys App of Apps
+  ├── App: showroom          (lab guide + terminal + OCP Console tab)
+  └── App: ocp-console-embed (Job patches routes per-route)
+
+Later: push to git → ArgoCD syncs → no re-order needed
+```
+
+### What the Embed Job Does
 
 | Step | Target | Change |
 |------|--------|--------|
@@ -21,12 +93,65 @@ ArgoCD
 | 3 | `Route/oauth-openshift` in `openshift-authentication` | Add reencrypt TLS with service CA + delete security headers |
 | 4 | Verify | Poll console URL until `X-Frame-Options` is gone |
 
-### What it does NOT do
+### What It Does NOT Do (vs the Current Insecure Role)
 
-- Does NOT modify `IngressController/default`
-- Does NOT disable the authentication operator
-- Does NOT create ResourceQuotas blocking operator pods
-- Only touches the two specific routes that need iframe embedding
+- Does NOT modify `IngressController/default` -- only the two specific routes
+- Does NOT disable the authentication operator -- operator stays running and healthy
+- Does NOT create ResourceQuotas blocking operator pods -- CVO stays happy
+- `oc get clusterversion` stays clean, no degraded operators
+
+### Old vs New Comparison
+
+```
+OLD (ocp4_workload_showroom_ocp_integration):
+┌─────────────────────────────────────────┐
+│  IngressController: "default"           │
+│  httpHeaders.actions DELETE on ALL:     │
+│    - X-Frame-Options                    │
+│    - Content-Security-Policy            │
+│    - referrer-policy                    │
+│  auth-operator: KILLED (scale 0)        │
+│  ResourceQuota: pods=0 (block restart)  │
+│  Affects: EVERY route on the cluster    │
+└─────────────────────────────────────────┘
+
+NEW (this repo -- per-route patching):
+┌─────────────────────────────────────────┐
+│  IngressController: "default"           │
+│  (UNTOUCHED - all security headers ON)  │
+│                                         │
+│  Route/console:                         │
+│    spec.httpHeaders → DELETE X-Frame,   │
+│                       DELETE CSP        │
+│  Route/oauth-openshift:                 │
+│    spec.httpHeaders → DELETE X-Frame,   │
+│                       DELETE CSP        │
+│    spec.tls → reencrypt with service CA │
+│                                         │
+│  auth-operator: RUNNING (untouched)     │
+│  Affects: ONLY 2 routes                 │
+└─────────────────────────────────────────┘
+```
+
+### Showroom Pod Internals
+
+```
+Pod: showroom
+├── Init: git-cloner      → clones content repo to /showroom/repo
+├── Init: antora-builder   → renders AsciiDoc to /showroom/www
+│
+├── Container: nginx       → port 8080 (reverse proxy)
+│   ├── / → proxy_pass http://127.0.0.1:8000 (content)
+│   └── /terminal/ → proxy_pass http://127.0.0.1:7681 (terminal, WebSocket)
+│
+├── Container: content     → port 8000 (showroom-content app)
+│   ├── Serves rendered HTML with two-pane layout
+│   ├── Reads ui-config.yml for tab definitions
+│   ├── Substitutes ${DOMAIN} in tab URLs
+│   └── Renders <iframe src="..."> for each tab
+│
+└── Container: terminal    → port 7681 (optional, ttyd-based)
+```
 
 ## Deployment
 
@@ -34,7 +159,7 @@ Order from RHDP (`ocp-field-asset-cnv`) with:
 
 | Field | Value |
 |-------|-------|
-| Repo URL | `https://github.com/prakhar-srivastav/showroom-ocp-console-embed.git` |
+| Repo URL | `https://github.com/prakhar1985/showroom-ocp-console-embed.git` |
 | Revision | `main` |
 | Path | `showroom/helm` |
 
@@ -71,4 +196,4 @@ oc get pods -n openshift-authentication-operator
 
 ## Experiment Notes
 
-If OCP operators revert the `httpHeaders` on the routes, switch the Job to a CronJob (every 5 min) or fall back to a dedicated IngressController for the console routes.
+If OCP operators revert the `httpHeaders` on the routes, switch the Job to a CronJob (every 5 min) or fall back to a dedicated IngressController with route sharding for the console routes.
