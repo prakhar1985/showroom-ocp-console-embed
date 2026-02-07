@@ -23,6 +23,14 @@ rules:
     verbs:
       - get
       - patch
+  # Required to set destinationCACertificate on the OAuth route
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes/custom-host
+    verbs:
+      - create
+      - update
   # Read service CA cert from openshift-authentication
   - apiGroups:
       - ""

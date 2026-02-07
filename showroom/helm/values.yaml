@@ -24,6 +24,9 @@ demo:
 # N = N users (creates showroom-user1 through showroom-userN)
 numUsers: 0
 
+# User password for multi-user mode (injected by AgV catalog)
+userPassword: ""
+
 # Component toggles
 components:
   showroom:

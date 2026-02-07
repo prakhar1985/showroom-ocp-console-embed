@@ -6,7 +6,7 @@
 {{- $userNum := add $i 1 }}
 {{- /* Merge per-user data into shared showroom values */}}
 {{- $shared := deepCopy (index $.Values.components.showroom.values "showroom") }}
-{{- $perUser := dict "user" (printf "user%d" (int $userNum)) "password" (default "" (index (default dict $shared.userdata) "openshift_cluster_user_password")) }}
+{{- $perUser := dict "user" (printf "user%d" (int $userNum)) "password" (default "" $.Values.userPassword) }}
 {{- $_ := set $shared "userdata" (merge $perUser (default dict $shared.userdata)) }}
 ---
 apiVersion: argoproj.io/v1alpha1
