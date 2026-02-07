@@ -1,17 +1,18 @@
+{{- $guid := .Values.deployer.guid }}
 {{- if .Values.components.showroom.enabled }}
 {{- if gt (int .Values.numUsers) 0 }}
-{{- /* Multi-user: create showroom-user1 through showroom-userN */}}
+{{- /* Multi-user: create showroom-{guid}-user1 through showroom-{guid}-userN */}}
 {{- range $i := until (int $.Values.numUsers) }}
 {{- $userNum := add $i 1 }}
 {{- /* Merge per-user data into shared showroom values */}}
 {{- $shared := deepCopy (index $.Values.components.showroom.values "showroom") }}
-{{- $perUser := dict "user" (printf "user%d" (int $userNum)) "password" ($.Values.userPassword | default "") }}
+{{- $perUser := dict "user" (printf "user%d" (int $userNum)) "password" (default "" (index (default dict $shared.userdata) "openshift_cluster_user_password")) }}
 {{- $_ := set $shared "userdata" (merge $perUser (default dict $shared.userdata)) }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: showroom-user{{ $userNum }}
+  name: showroom-{{ $guid }}-user{{ $userNum }}
   namespace: {{ $.Values.argocd.namespace }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -29,7 +30,7 @@ spec:
           namespace: {{ $.Values.demo.namespace | quote }}
           appName: {{ $.Values.demo.appName | quote }}
         showroom:
-          namespace: showroom-user{{ $userNum }}
+          namespace: {{ $guid }}-user{{ $userNum }}
           {{- toYaml $shared | nindent 10 }}
   destination:
     server: {{ $.Values.argocd.destination.server }}
@@ -48,7 +49,7 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: showroom-admin
+  name: showroom-{{ $guid }}-admin
   namespace: {{ .Values.argocd.namespace }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -66,7 +67,7 @@ spec:
           namespace: {{ .Values.demo.namespace | quote }}
           appName: {{ .Values.demo.appName | quote }}
         showroom:
-          namespace: showroom-admin
+          namespace: {{ $guid }}-admin
           {{- toYaml $shared | nindent 10 }}
   destination:
     server: {{ .Values.argocd.destination.server }}
@@ -81,7 +82,7 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: ocp-console-embed
+  name: ocp-console-embed-{{ $guid }}
   namespace: {{ .Values.argocd.namespace }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -95,6 +96,9 @@ spec:
       valuesObject:
         deployer:
           domain: {{ .Values.deployer.domain | quote }}
+        ocpConsoleEmbed:
+          name: ocp-console-embed-{{ $guid }}
+          namespace: ocp-console-embed-{{ $guid }}
   destination:
     server: {{ .Values.argocd.destination.server }}
   syncPolicy:

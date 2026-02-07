@@ -1,4 +1,5 @@
 {{- if .Values.components.showroom.enabled }}
+{{- $guid := .Values.deployer.guid }}
 ---
 # UserInfo ConfigMap for RHDP/Babylon integration
 # The ocp4_workload_gitops_bootstrap role discovers ConfigMaps with the
@@ -7,7 +8,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: showroom-userinfo
+  name: showroom-userinfo-{{ $guid }}
   namespace: openshift-gitops
   labels:
     demo.redhat.com/userinfo: ""
@@ -16,20 +17,20 @@ data:
   cluster_domain: {{ .Values.deployer.domain | quote }}
   {{- if gt (int .Values.numUsers) 0 }}
   # Multi-user: global URL points to user1, per-user URLs in users_json
-  lab_ui_url: "https://showroom-showroom-user1.{{ .Values.deployer.domain }}"
+  lab_ui_url: "https://showroom-{{ $guid }}-user1.{{ .Values.deployer.domain }}"
   users_json: |-
     {
       "users": {
         {{- range $i := until (int $.Values.numUsers) }}
         {{- $userNum := add $i 1 }}
         "user{{ $userNum }}": {
-          "lab_ui_url": "https://showroom-showroom-user{{ $userNum }}.{{ $.Values.deployer.domain }}"
+          "lab_ui_url": "https://showroom-{{ $guid }}-user{{ $userNum }}.{{ $.Values.deployer.domain }}"
         }{{ if lt (int $userNum) (int $.Values.numUsers) }},{{ end }}
         {{- end }}
       }
     }
   {{- else }}
   # Single admin user
-  lab_ui_url: "https://showroom-showroom-admin.{{ .Values.deployer.domain }}"
+  lab_ui_url: "https://showroom-{{ $guid }}-admin.{{ .Values.deployer.domain }}"
   {{- end }}
 {{- end }}

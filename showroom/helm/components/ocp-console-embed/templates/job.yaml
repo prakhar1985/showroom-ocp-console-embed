@@ -23,6 +23,7 @@ spec:
             - |
               DOMAIN="{{ .Values.deployer.domain }}"
               CONSOLE_HOST="console-openshift-console.${DOMAIN}"
+              OAUTH_HOST="oauth-openshift.${DOMAIN}"
 
               echo "=== OCP Console Embed: Default IngressController Setup ==="
               echo "Domain: ${DOMAIN}"
@@ -31,28 +32,36 @@ spec:
               # -------------------------------------------------------
               # Step 1: Patch default IngressController to strip headers
               # -------------------------------------------------------
-              echo "Step 1: Patching IngressController/default to strip X-Frame-Options and CSP..."
+              echo "Step 1: Patching IngressController/default (delete X-Frame-Options, set CSP frame-ancestors)..."
+
+              # Set CSP frame-ancestors instead of deleting CSP entirely.
+              # This restricts framing to same-cluster origins only, retaining
+              # XSS protection for all other CSP directives.
+              CSP_VALUE="frame-ancestors 'self' https://*.${DOMAIN}"
 
               oc patch ingresscontroller default -n openshift-ingress-operator \
                 --type=merge \
-                -p '{
-                  "spec": {
-                    "httpHeaders": {
-                      "actions": {
-                        "response": [
+                -p "{
+                  \"spec\": {
+                    \"httpHeaders\": {
+                      \"actions\": {
+                        \"response\": [
                           {
-                            "name": "X-Frame-Options",
-                            "action": { "type": "Delete" }
+                            \"name\": \"X-Frame-Options\",
+                            \"action\": { \"type\": \"Delete\" }
                           },
                           {
-                            "name": "Content-Security-Policy",
-                            "action": { "type": "Delete" }
+                            \"name\": \"Content-Security-Policy\",
+                            \"action\": {
+                              \"type\": \"Set\",
+                              \"set\": { \"value\": \"${CSP_VALUE}\" }
+                            }
                           }
                         ]
                       }
                     }
                   }
-                }'
+                }"
               echo "  IngressController/default patched."
 
               # -------------------------------------------------------
@@ -105,10 +114,10 @@ spec:
               fi
 
               # -------------------------------------------------------
-              # Step 4: Verify X-Frame-Options is gone
+              # Step 4: Verify X-Frame-Options is gone (Console)
               # -------------------------------------------------------
               echo ""
-              echo "Step 4: Verifying X-Frame-Options is stripped..."
+              echo "Step 4: Verifying console X-Frame-Options is stripped..."
               echo "  Console URL: https://${CONSOLE_HOST}"
 
               for i in $(seq 1 30); do
@@ -118,14 +127,42 @@ spec:
                   sleep 10
                 else
                   if echo "$HEADERS" | grep -qi "HTTP"; then
-                    echo "  X-Frame-Options is gone. Console ready for iframe embedding."
+                    echo "  Console X-Frame-Options is gone."
                     break
                   else
-                    echo "  Attempt $i/30: route not responding yet, waiting 10s..."
+                    echo "  Attempt $i/30: console route not responding yet, waiting 10s..."
                     sleep 10
                   fi
                 fi
               done
+
+              # -------------------------------------------------------
+              # Step 5: Verify OAuth route
+              # -------------------------------------------------------
+              echo ""
+              echo "Step 5: Checking OAuth route status..."
+              OAUTH_TLS=$(oc get route oauth-openshift -n openshift-authentication \
+                -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)
+              echo "  OAuth route TLS termination: ${OAUTH_TLS}"
+
+              if [ "$OAUTH_TLS" = "reencrypt" ]; then
+                echo "  OAuth route is reencrypt. Checking headers..."
+                for i in $(seq 1 10); do
+                  HEADERS=$(curl -skI "https://${OAUTH_HOST}" 2>/dev/null || true)
+                  if echo "$HEADERS" | grep -qi "x-frame-options"; then
+                    echo "  Attempt $i/10: OAuth X-Frame-Options still present, waiting 5s..."
+                    sleep 5
+                  else
+                    if echo "$HEADERS" | grep -qi "HTTP"; then
+                      echo "  OAuth X-Frame-Options is gone. Login will work in iframe."
+                      break
+                    fi
+                  fi
+                done
+              else
+                echo "  OAuth route is ${OAUTH_TLS} (auth operator may revert to passthrough)."
+                echo "  The CronJob will re-patch periodically."
+              fi
 
               echo ""
               echo "=== OCP Console Embed: Setup Complete ==="

@@ -2,7 +2,7 @@
 ocpConsoleEmbed:
   namespace: ocp-console-embed
   name: ocp-console-embed
-  image: quay.io/openshift/origin-cli:latest
+  image: quay.io/openshift/origin-cli:4.17
 
 # Injected by parent chart
 deployer:

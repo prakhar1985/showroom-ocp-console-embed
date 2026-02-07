@@ -9,9 +9,10 @@ argocd:
 repoUrl: https://github.com/prakhar1985/showroom-ocp-console-embed.git
 revision: main
 
-# Deployer domain -- injected by RHDP at order time
+# Deployer values -- injected by RHDP at order time
 deployer:
   domain: ""
+  guid: ""
 
 # Demo metadata -- injected by RHDP
 demo:
@@ -21,10 +22,7 @@ demo:
 # Multi-user support
 # 0 = single admin user (creates showroom-admin)
 # N = N users (creates showroom-user1 through showroom-userN)
-numUsers: 1
-
-# User password (shared across all users, injected by AgnosticV)
-userPassword: ""
+numUsers: 0
 
 # Component toggles
 components:

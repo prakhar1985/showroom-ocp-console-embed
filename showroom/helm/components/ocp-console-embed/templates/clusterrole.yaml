@@ -8,6 +8,8 @@ rules:
       - operator.openshift.io
     resources:
       - ingresscontrollers
+    resourceNames:
+      - default
     verbs:
       - get
       - patch
@@ -16,6 +18,8 @@ rules:
       - route.openshift.io
     resources:
       - routes
+    resourceNames:
+      - oauth-openshift
     verbs:
       - get
       - patch
@@ -24,5 +28,7 @@ rules:
       - ""
     resources:
       - configmaps
+    resourceNames:
+      - v4-0-config-system-service-ca
     verbs:
       - get
