@@ -39,10 +39,11 @@ spec:
       prune: true
 {{- end }}
 {{- else }}
-{{- /* Single admin user */}}
+{{- /* Single admin user -- set user/password from global admin creds */}}
 {{- $shared := deepCopy (index .Values.components.showroom.values "showroom") }}
-{{- $perUser := dict "user" "admin" "password" (.Values.userPassword | default "") }}
-{{- $_ := set $shared "userdata" (merge $perUser (default dict $shared.userdata)) }}
+{{- $ud := default dict $shared.userdata }}
+{{- $perUser := dict "user" (default "admin" (index $ud "openshift_cluster_admin_username")) "password" (default "" (index $ud "openshift_cluster_admin_password")) }}
+{{- $_ := set $shared "userdata" (merge $perUser $ud) }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
