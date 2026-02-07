@@ -90,6 +90,26 @@ data:
     cluster_domain: {{ .Values.deployer.domain }}
     demo_namespace: {{ .Values.demo.namespace }}
     demo_app: {{ .Values.demo.appName }}
+{{- if .Values.showroom.tabs }}
+---
+# Showroom UI Config (overrides content repo ui-config.yml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.showroom.name }}-ui-config
+  namespace: {{ .Values.showroom.namespace }}
+data:
+  ui-config.yml: |
+    ---
+    type: showroom
+    default_width: 30
+    persist_url_state: true
+    tabs:
+    {{- range .Values.showroom.tabs }}
+      - name: {{ .name | quote }}
+        url: {{ .url | quote }}
+    {{- end }}
+{{- end }}
 ---
 # Showroom PVC
 apiVersion: v1
@@ -216,6 +236,11 @@ spec:
         - mountPath: /showroom/www
           name: showroom-files
           subPath: www
+        {{- if .Values.showroom.tabs }}
+        - name: ui-config
+          mountPath: /showroom/repo/ui-config.yml
+          subPath: ui-config.yml
+        {{- end }}
         ports:
         - containerPort: 8000
           protocol: TCP
@@ -267,6 +292,11 @@ spec:
       - name: terminal-lab-user-home
         persistentVolumeClaim:
           claimName: {{ .Values.showroom.name }}-terminal-lab-user-home
+      {{- if .Values.showroom.tabs }}
+      - name: ui-config
+        configMap:
+          name: {{ .Values.showroom.name }}-ui-config
+      {{- end }}
 ---
 # Showroom Route
 apiVersion: route.openshift.io/v1

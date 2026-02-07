@@ -33,6 +33,10 @@ components:
         content:
           repoUrl: "https://github.com/rhpds/openshift-pipelines-demo-showroom.git"
           repoRef: "main"
+        # Tabs for the right pane (overrides content repo ui-config.yml)
+        tabs:
+          - name: OCP Console
+            url: "https://console-openshift-console.${DOMAIN}"
 
   ocpConsoleEmbed:
     enabled: true
