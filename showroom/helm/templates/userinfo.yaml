@@ -16,20 +16,20 @@ data:
   cluster_domain: {{ .Values.deployer.domain | quote }}
   {{- if gt (int .Values.numUsers) 0 }}
   # Multi-user: global URL points to user1, per-user URLs in users_json
-  showroom_primary_view_url: "https://showroom-showroom-user1.{{ .Values.deployer.domain }}"
+  lab_ui_url: "https://showroom-showroom-user1.{{ .Values.deployer.domain }}"
   users_json: |-
     {
       "users": {
         {{- range $i := until (int $.Values.numUsers) }}
         {{- $userNum := add $i 1 }}
         "user{{ $userNum }}": {
-          "showroom_primary_view_url": "https://showroom-showroom-user{{ $userNum }}.{{ $.Values.deployer.domain }}"
+          "lab_ui_url": "https://showroom-showroom-user{{ $userNum }}.{{ $.Values.deployer.domain }}"
         }{{ if lt (int $userNum) (int $.Values.numUsers) }},{{ end }}
         {{- end }}
       }
     }
   {{- else }}
   # Single admin user
-  showroom_primary_view_url: "https://showroom-showroom-admin.{{ .Values.deployer.domain }}"
+  lab_ui_url: "https://showroom-showroom-admin.{{ .Values.deployer.domain }}"
   {{- end }}
 {{- end }}
