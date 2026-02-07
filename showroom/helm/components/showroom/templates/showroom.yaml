@@ -90,6 +90,9 @@ data:
     cluster_domain: {{ .Values.deployer.domain }}
     demo_namespace: {{ .Values.demo.namespace }}
     demo_app: {{ .Values.demo.appName }}
+    {{- range $key, $value := .Values.showroom.userdata }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
 {{- if .Values.showroom.tabs }}
 ---
 # Showroom UI Config (overrides content repo ui-config.yml)

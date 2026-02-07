@@ -39,6 +39,14 @@ showroom:
   #       url: "https://grafana-open-cluster-management-observability.${DOMAIN}"
   tabs: []
 
+  # Arbitrary user data passed to Showroom content as template variables.
+  # Any key-value pair here becomes available in AsciiDoc as {key}.
+  # Example:
+  #   userdata:
+  #     openshift_cluster_admin_username: admin
+  #     openshift_cluster_admin_password: r3dh4t
+  userdata: {}
+
 # Injected by parent chart
 deployer:
   domain: ""
