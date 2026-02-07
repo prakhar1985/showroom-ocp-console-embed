@@ -1,234 +1,129 @@
 # Showroom OCP Console Embed (GitOps)
 
-Deploys Showroom with an embedded OpenShift Console tab by stripping `X-Frame-Options` and `Content-Security-Policy` headers from the default IngressController and patching the OAuth route with reencrypt TLS -- all operators stay running, no ResourceQuotas, no CVO degradation.
+Embeds the OpenShift Console inside Showroom as an iframe tab -- deployed via ArgoCD, with all cluster operators intact and no security hacks.
 
-## Why This Approach Is More Secure
+## The Problem
 
-Both approaches strip `X-Frame-Options` and `Content-Security-Policy` from the default IngressController -- that is required for iframe embedding. The security improvement is everything else the old role (`ocp4_workload_showroom_ocp_integration`) does on top of that.
+Showroom displays lab instructions on the left and an iframe on the right. To show the OCP Console in that iframe, the browser needs the console to allow being embedded. By default, OpenShift blocks this with security headers (`X-Frame-Options`, `Content-Security-Policy`).
 
-### 1. Authentication Operator Stays Running
+The existing solution (`ocp4_workload_showroom_ocp_integration` Ansible role) removes these headers, but it also **kills the authentication operator** and **blocks OpenShift from restarting it**. This leaves the cluster unable to recover from authentication failures during the lab.
 
-The old role **kills the authentication operator** (scales to 0) and blocks CVO from restarting it with a `ResourceQuota`. This means:
+## Why This Repo Is More Secure
 
-- If OAuth breaks during the lab, the cluster **cannot self-heal**. Users are locked out with no recovery path.
-- If someone accidentally deletes the OAuth route, no operator exists to recreate it. The cluster's authentication is permanently broken until manual intervention.
-- An attacker who gains access during this window faces no self-healing defenses on the authentication layer.
+**In plain terms:** both the old approach and this repo remove the same iframe-blocking headers. The difference is what else the old approach does -- it disables critical cluster safety mechanisms that have nothing to do with iframe embedding.
 
-Our approach **never touches the auth operator**. It stays running, continues reconciling, and can recover from failures. The cluster's authentication self-healing is fully intact.
+Think of it like unlocking a door so guests can enter. The old approach unlocks the door **and** disconnects the alarm system, fires the security guard, and tapes over the cameras. This repo just unlocks the door.
 
-### 2. No ResourceQuota Blocking CVO
+### What the old role breaks (and we don't)
 
-The old role creates `ResourceQuota` with `pods: "0"` in `openshift-authentication-operator` to prevent CVO from restarting the auth operator. This:
+| | Old Role | This Repo |
+|---|---|---|
+| **Login system recovery** | Disabled. If login breaks during the lab, nobody can fix it automatically. Students get locked out. | Intact. OpenShift can detect and fix login issues on its own. |
+| **Cluster health status** | Reports "degraded" because it detects a missing operator. Confusing for anyone checking cluster health. | Reports healthy. Everything looks normal. |
+| **Cleanup after lab** | None. The next person who uses the cluster inherits a broken setup. | ArgoCD removes resources when the app is deleted. |
+| **Headers removed** | Three headers removed, including `referrer-policy` which leaks internal URLs to external sites. | Only two headers removed -- the minimum needed for iframe embedding. |
+| **Login route** | Deleted and recreated from scratch. If the recreation fails, login is permanently broken. | Patched in place. If the patch fails, the original route is still there. |
 
-- Puts CVO in a **degraded state** -- it detects a missing operator and reports the cluster as unhealthy
-- Means CVO cannot remediate **any** authentication-related issue
-- Leaves a footprint that persists after the lab ends -- the next user inherits a degraded cluster
-
-Our approach creates **no ResourceQuotas**. CVO reports healthy. All operators can be managed normally.
-
-### 3. OAuth Route Patched, Not Destroyed
-
-The old role **deletes** the `oauth-openshift` route and recreates it from scratch. If anything goes wrong during recreation (network issue, partial apply, timing race), the OAuth route is gone and there's no operator to bring it back (because it was killed in step 2).
-
-Our approach **patches the existing route** in place with `--type=merge`. If the patch fails, the original route is untouched. The auth operator can still reconcile it.
-
-### 4. Fewer Headers Stripped
-
-The old role strips three headers: `X-Frame-Options`, `Content-Security-Policy`, **and `referrer-policy`**. Stripping `referrer-policy` leaks the full referrer URL (including paths and query parameters) to external sites for every route on the cluster. This can expose:
-
-- Internal dashboard URLs and paths
-- OAuth tokens in URL parameters
-- Internal hostnames and namespace names
-
-Our approach strips **only** `X-Frame-Options` and `Content-Security-Policy` -- the minimum needed for iframe embedding. `referrer-policy` stays intact.
-
-### 5. Clean Rollback via GitOps
-
-The old role's `remove_workload.yml` is tagged `debug` -- it never runs in production. After the lab ends, the cluster still has:
-- Headers stripped cluster-wide
-- Auth operator dead
-- ResourceQuota blocking recovery
-
-Our approach uses ArgoCD with `prune: true`. Delete the ArgoCD Application and all resources are removed. The IngressController patch is the only thing that needs manual revert (or a cleanup Job).
-
-### Security Comparison
+### Security comparison at a glance
 
 ```
-OLD ROLE -- attack surface during lab:
-  [x] Auth operator dead -- no self-healing on OAuth
-  [x] CVO degraded -- cannot remediate auth issues
-  [x] OAuth route deleted/recreated -- risk of broken auth
-  [x] referrer-policy stripped -- URL leakage to external sites
-  [x] No rollback -- cluster stays weakened after lab
+OLD ROLE:
+  [x] Authentication operator killed
+  [x] Cluster reports degraded
+  [x] Login route deleted and recreated (risky)
+  [x] referrer-policy stripped (leaks internal URLs)
+  [x] No cleanup after lab ends
 
-NEW APPROACH -- attack surface during lab:
-  [ ] Auth operator running -- self-heals OAuth issues
-  [ ] CVO healthy -- full remediation capability
-  [ ] OAuth route patched in place -- fallback to original
-  [ ] referrer-policy intact -- no URL leakage
-  [ ] GitOps rollback -- delete app, resources pruned
+THIS REPO:
+  [ ] Authentication operator running
+  [ ] Cluster reports healthy
+  [ ] Login route patched in place (safe)
+  [ ] referrer-policy intact
+  [ ] GitOps cleanup via ArgoCD
 ```
 
-## What the Old Role Does (and Why It's Dangerous)
+### Technical details
 
-Today, teams use the `ocp4_workload_showroom_ocp_integration` Ansible role. Here's what it actually does:
+The old role scales `authentication-operator` to 0 replicas and creates a `ResourceQuota` with `pods: "0"` to prevent CVO (Cluster Version Operator) from restarting it. This puts CVO in a degraded state and removes the cluster's ability to self-heal authentication. The `remove_workload.yml` is tagged `debug` and never runs in production, so these changes persist after the lab.
 
-| Step | Action | Security Impact |
-|------|--------|-----------------|
-| 1 | Patch `IngressController/default` to delete `X-Frame-Options`, `Content-Security-Policy`, `referrer-policy` on **all routes** | Every app on the cluster loses clickjacking/CSP/referrer protection |
-| 2 | Scale `authentication-operator` to 0 + `ResourceQuota` `pods: "0"` | Cluster cannot self-heal authentication. CVO reports degraded. |
-| 3 | Delete and recreate `oauth-openshift` route with reencrypt TLS | Risky -- if recreation fails, OAuth is broken with no operator to fix it |
+Our approach patches `IngressController/default` to strip `X-Frame-Options` and `Content-Security-Policy` (not `referrer-policy`) and patches `Route/oauth-openshift` with reencrypt TLS using the service CA. The authentication operator stays running throughout. CVO reports healthy. All changes are managed by ArgoCD with `prune: true`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  OpenShift IngressController (default)                          │
-│                                                                 │
-│  OLD ROLE: httpHeaders.actions DELETE on ALL routes:             │
-│    - X-Frame-Options     (clickjacking protection)              │
-│    - Content-Security-Policy  (resource loading control)        │
-│    - referrer-policy     (referrer leakage)                     │
-│                                                                 │
-│  ALSO: authentication-operator scaled to 0 + ResourceQuota      │
-│        to prevent operator from reverting OAuth route changes    │
-└─────────────────────────────────────────────────────────────────┘
-```
+## How It Works
 
-## Solution: Patch Default IngressController + OAuth Route
+An ArgoCD App of Apps deploys two components:
 
-On single-node RHDP clusters (which is the standard deployment), we patch the **default IngressController** to strip iframe-blocking headers and patch the **OAuth route** with reencrypt TLS. This is the same header stripping as the old approach, but **without killing the auth operator or creating ResourceQuotas**.
-
-### Deployment Flow
+1. **showroom** -- the lab guide with an embedded OCP Console tab
+2. **ocp-console-embed** -- a one-time Job that configures the cluster for iframe embedding
 
 ```
-RHDP Order (ocp-field-asset-cnv)
-  → GitOps Repo: github.com/prakhar1985/showroom-ocp-console-embed
-  → Revision: main
-  → Path: showroom/helm
+RHDP Order
+  → ArgoCD syncs this repo
         ↓
-ArgoCD deploys App of Apps
-  ├── App: showroom              (lab guide + terminal + OCP Console tab)
-  └── App: ocp-console-embed
-        ├── RBAC                 (SA + ClusterRole + ClusterRoleBinding)
-        └── Job (PostSync):
-              ├── Patch IngressController/default (strip X-Frame-Options + CSP)
-              ├── Read service CA cert
-              ├── Patch Route/oauth-openshift (reencrypt TLS + service CA)
-              └── Verify headers stripped
-
-Later: push to git → ArgoCD syncs → no re-order needed
+  ├── showroom           (lab guide + terminal + OCP Console tab)
+  └── ocp-console-embed  (Job patches IngressController + OAuth route)
 ```
 
-### How It Works
+### What the Job does
+
+| Step | What | Why |
+|------|------|-----|
+| 1 | Patch `IngressController/default` to delete `X-Frame-Options` and `Content-Security-Policy` headers | Allows the console to load inside an iframe |
+| 2 | Read the service CA certificate | Needed for secure communication with the OAuth service |
+| 3 | Patch `Route/oauth-openshift` with reencrypt TLS | Ensures the login flow works through the iframe |
+| 4 | Verify the console responds without `X-Frame-Options` | Confirms the setup worked |
+
+### Why IngressController-level patching is required
+
+OpenShift operators actively manage their own routes. If you try to add `httpHeaders` directly to the `console` or `oauth-openshift` routes, the console-operator and authentication-operator will revert the change within seconds. The only reliable way to strip these headers is at the IngressController level.
+
+### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  IngressController: "default"                                    │
-│                                                                  │
-│  httpHeaders.actions:                                            │
-│    DELETE X-Frame-Options                                        │
-│    DELETE Content-Security-Policy                                │
-│                                                                  │
-│  Route/oauth-openshift patched with reencrypt TLS + service CA   │
-│                                                                  │
-│  auth-operator: RUNNING (untouched)                              │
-│  CVO: healthy, no degraded operators                             │
-│  No ResourceQuotas blocking anything                             │
+│  BROWSER                                                        │
+│                                                                 │
+│  ┌──────────────────────┐  ┌──────────────────────────────────┐ │
+│  │ Left Pane            │  │ Right Pane (iframe tabs)         │ │
+│  │ Lab instructions     │  │                                  │ │
+│  │ (AsciiDoc rendered   │  │  Tab 1: OCP Console              │ │
+│  │  by Antora)          │  │  Tab 2: ArgoCD                   │ │
+│  │                      │  │  Tab N: ...                       │ │
+│  └──────────────────────┘  └──────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
-```
-
-### What the Setup Job Does
-
-| Step | Target | Change |
-|------|--------|--------|
-| 1 | `IngressController/default` | Patch `spec.httpHeaders.actions` to delete `X-Frame-Options` + `Content-Security-Policy` |
-| 2 | `ConfigMap/v4-0-config-system-service-ca` | Read service CA cert for reencrypt TLS |
-| 3 | `Route/oauth-openshift` | Patch with `reencrypt` TLS termination + service CA certificate |
-| 4 | Verify | Poll console URL until responding without `X-Frame-Options` |
-
-### What It Does NOT Do (vs the Old Insecure Role)
-
-- Does NOT disable the authentication operator -- operator stays running
-- Does NOT create ResourceQuotas blocking operator pods -- CVO stays happy
-- Does NOT delete/recreate the OAuth route -- patches in place
-- Does NOT strip `referrer-policy` -- only removes what's needed for iframe embedding
-- `oc get clusterversion` stays clean, no degraded operators
-
-### Old vs New Comparison
-
-```
-OLD (ocp4_workload_showroom_ocp_integration):
-┌─────────────────────────────────────────┐
-│  IngressController: "default"           │
-│  httpHeaders.actions DELETE on ALL:     │
-│    - X-Frame-Options                    │
-│    - Content-Security-Policy            │
-│    - referrer-policy                    │
-│  auth-operator: KILLED (scale 0)        │
-│  ResourceQuota: pods=0 (block restart)  │
-│  OAuth route: DELETED and recreated     │
-│  Affects: EVERY route on the cluster    │
-│  CVO: DEGRADED                          │
-└─────────────────────────────────────────┘
-
-NEW (this repo):
-┌─────────────────────────────────────────┐
-│  IngressController: "default"           │
-│  httpHeaders.actions DELETE:            │
-│    - X-Frame-Options                    │
-│    - Content-Security-Policy            │
-│  auth-operator: RUNNING (untouched)     │
-│  OAuth route: PATCHED (not recreated)   │
-│  CVO: HEALTHY                           │
-│  No ResourceQuotas                      │
-└─────────────────────────────────────────┘
-```
-
-### Showroom Pod Internals
-
-```
-Pod: showroom
-├── Init: git-cloner      → clones content repo to /showroom/repo
-├── Init: antora-builder   → renders AsciiDoc to /showroom/www
-│
-├── Container: nginx       → port 8080 (reverse proxy)
-│   ├── / → proxy_pass http://127.0.0.1:8000 (content)
-│   └── /terminal/ → proxy_pass http://127.0.0.1:7681 (terminal, WebSocket)
-│
-├── Container: content     → port 8000 (showroom-content app)
-│   ├── Serves rendered HTML with two-pane layout
-│   ├── Reads ui-config.yml for tab definitions
-│   ├── Substitutes ${DOMAIN} in tab URLs
-│   └── Renders <iframe src="..."> for each tab
-│
-└── Container: terminal    → port 7681 (optional, ttyd-based)
+         │                              │
+         │                              │ Browser fetches console directly
+         ▼                              ▼
+   Showroom Pod                  IngressController (default)
+   ├── nginx (proxy)             ├── X-Frame-Options: DELETED
+   ├── content (lab guide)       └── Content-Security-Policy: DELETED
+   └── terminal (ttyd)
+                                 Authentication operator: RUNNING
+                                 CVO: HEALTHY
 ```
 
 ## Multi-User Support
 
-Set `numUsers` in `values.yaml` or pass it at deploy time:
+Set `numUsers` in `values.yaml` or pass it at deploy time via AgnosticV:
 
-| `numUsers` | Result |
-|------------|--------|
-| `0` (default) | Single `showroom-admin` instance |
+| `numUsers` | What gets created |
+|------------|-------------------|
+| `0` (default) | Single `showroom-admin` instance for admin/demo use |
 | `N` | `showroom-user1` through `showroom-userN`, each in its own namespace |
 
-In AgnosticV, `num_users` is passed as a parameter at order time (e.g., `num_users: 5` creates 5 Showroom instances). Each user gets their own namespace, pod, route, and PVC.
+Each user gets their own Showroom instance with its own namespace, pod, route, and persistent storage. The `ocp-console-embed` Job runs once regardless -- it's a cluster-level operation.
 
 ```
-numUsers=0:
-  └── showroom-admin  (namespace: showroom-admin)
+numUsers=0:                        numUsers=3:
+  └── showroom-admin                 ├── showroom-user1
+                                     ├── showroom-user2
+                                     └── showroom-user3
 
-numUsers=3:
-  ├── showroom-user1  (namespace: showroom-user1)
-  ├── showroom-user2  (namespace: showroom-user2)
-  └── showroom-user3  (namespace: showroom-user3)
-
-ocp-console-embed always runs once (cluster-level)
+ocp-console-embed runs once (cluster-level, shared by all users)
 ```
 
 ## Configurable Tabs
 
-Tabs are defined in `values.yaml` under `showroom.tabs`. When set, a ConfigMap is generated and mounted over the content repo's `ui-config.yml`, so you can add/remove tabs without forking the content repo.
+Tabs are defined in `values.yaml`. When set, a ConfigMap overrides the content repo's `ui-config.yml` -- no need to fork or modify the content repo.
 
 ```yaml
 components:
@@ -240,17 +135,15 @@ components:
             url: "https://console-openshift-console.${DOMAIN}"
           - name: ArgoCD
             url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
-          - name: Grafana
-            url: "https://grafana-open-cluster-management-observability.${DOMAIN}"
 ```
 
-- `${DOMAIN}` is substituted at runtime by the Showroom content container
-- If `tabs: []` (empty), falls back to whatever the content repo has in its `ui-config.yml`
-- Tabs appear as iframe panels in the right pane of the Showroom UI
+- `${DOMAIN}` is automatically replaced with the cluster's domain at runtime
+- If `tabs: []` (empty), the content repo's own `ui-config.yml` is used
+- Add or remove tabs by editing `values.yaml` and pushing -- ArgoCD syncs the change
 
 ## Deployment
 
-Order from RHDP (`ocp-field-asset-cnv`) with:
+Order from RHDP with:
 
 | Field | Value |
 |-------|-------|
@@ -258,68 +151,47 @@ Order from RHDP (`ocp-field-asset-cnv`) with:
 | Revision | `main` |
 | Path | `showroom/helm` |
 
+Works on both single-node and multi-node RHDP clusters.
+
 ## Configuration
 
-Edit `showroom/helm/values.yaml` to:
+Edit `showroom/helm/values.yaml`:
 
-- Change the Showroom content repo (`components.showroom.values.showroom.content.repoUrl`)
-- Toggle components on/off (`components.showroom.enabled`, `components.ocpConsoleEmbed.enabled`)
-- Set deployer domain (injected by RHDP at order time)
-- Set `numUsers` for multi-user workshops
-- Configure `tabs` for custom iframe panels
+- **Content repo**: `components.showroom.values.showroom.content.repoUrl`
+- **Components**: toggle `components.showroom.enabled` / `components.ocpConsoleEmbed.enabled`
+- **Multi-user**: set `numUsers` (0 = admin only, N = N user instances)
+- **Tabs**: configure `components.showroom.values.showroom.tabs`
+- **Domain**: injected by RHDP at order time (`deployer.domain`)
 
-## Local Verification
-
-```bash
-# Single admin
-helm template showroom/helm \
-  --set deployer.domain=apps.cluster.example.com \
-  --set demo.namespace=demo \
-  --set demo.appName=myapp
-
-# Multi-user (3 users)
-helm template showroom/helm \
-  --set deployer.domain=apps.cluster.example.com \
-  --set demo.namespace=demo \
-  --set demo.appName=myapp \
-  --set numUsers=3
-```
-
-## Post-Deploy Verification
+## Verification
 
 ```bash
-# Check ArgoCD apps
+# Check ArgoCD apps are synced
 oc get applications -n openshift-gitops
 
-# Verify X-Frame-Options removed
+# Verify iframe headers are stripped
 curl -skI https://console-openshift-console.apps.DOMAIN | grep -i x-frame
-# Should return nothing (header stripped)
+# Should return nothing
 
-# Confirm operators are healthy
+# Confirm operators are healthy (not degraded)
 oc get clusterversion
 oc get pods -n openshift-authentication-operator
 
-# Check multi-user namespaces
+# Check user namespaces (multi-user)
 oc get namespaces | grep showroom
 ```
 
-## Old vs New -- Full Comparison
+## Full Comparison
 
-| Feature | Old (`ocp4_workload_showroom_ocp_integration`) | New (this repo) |
-|---------|-------|-----|
-| **Delivery** | Ansible role, runs once at provision | GitOps -- push to git, ArgoCD syncs |
-| **Header stripping** | Cluster-wide IC + referrer-policy | Cluster-wide IC (X-Frame-Options + CSP only) |
-| **Auth operator** | Killed (scale 0) | Running, untouched |
-| **ResourceQuota** | `pods: 0` blocking CVO | None |
-| **OAuth route** | Deleted and recreated | Patched in place (reencrypt TLS) |
-| **CVO status** | Degraded | Healthy |
-| **Rollback** | None (`remove_workload.yml` debug-only) | ArgoCD prune -- delete app, resources removed |
-| **Multi-user** | Ansible loop | `numUsers=N` generates N instances via App of Apps |
+| | Old (`ocp4_workload_showroom_ocp_integration`) | This repo |
+|---|---|---|
+| **How it's deployed** | Ansible role, runs once at provision time | GitOps -- push to git, ArgoCD syncs automatically |
+| **Headers removed** | `X-Frame-Options` + `Content-Security-Policy` + `referrer-policy` | `X-Frame-Options` + `Content-Security-Policy` only |
+| **Authentication operator** | Killed (scaled to 0) | Running, untouched |
+| **ResourceQuota** | `pods: 0` blocking CVO from recovery | None |
+| **OAuth route** | Deleted and recreated | Patched in place |
+| **Cluster health (CVO)** | Degraded | Healthy |
+| **Cleanup after lab** | None (`remove_workload.yml` is debug-only) | ArgoCD prune removes resources |
+| **Multi-user** | Ansible loop | `numUsers=N` creates N instances via App of Apps |
 | **Tabs** | Hardcoded in content repo | Configurable from Helm values |
-| **Content repo changes** | Required (fork/branch) | Optional -- tabs override from values |
-
-## Why IngressController-Level Patching Is Required
-
-The OpenShift console-operator and authentication-operator actively reconcile the routes they own (`Route/console`, `Route/oauth-openshift`). Any `spec.httpHeaders` added directly to these routes is wiped within seconds. The only reliable way to strip iframe-blocking headers is at the **IngressController level**.
-
-The critical improvement over the old approach is that **operators stay running** -- no ResourceQuotas, no CVO degradation, no killed authentication operator.
+| **Content repo changes needed** | Yes (fork or branch) | No -- tabs override from values |
