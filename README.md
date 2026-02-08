@@ -49,6 +49,7 @@ The filter is removed automatically when the lab ends. The operator's next write
 
 ### For RHDP operations
 - Works on ephemeral and long-running shared clusters
+- Tested on both **SNO** and **multi-node** clusters (multi-node takes a bit longer as the router config rolls out across all pods)
 - GUID-suffixed resources prevent naming collisions
 - Supports single-user (admin demo) and multi-user (up to 50 participants)
 - Showroom URLs auto-reported to RHDP portal
@@ -128,6 +129,7 @@ ocp-console-embed-{guid}/
 | Step | Action | Purpose |
 |------|--------|---------|
 | 1 | Patch `IngressController/default` | Strip `X-Frame-Options`, set `Content-Security-Policy` to `frame-ancestors 'self' https://*.DOMAIN` |
+| 1b | Wait for router rollout | Polls `IngressController` status until `Progressing=False`. On SNO (1 router pod) this is instant. On multi-node (3 router pods) this waits for all pods to pick up the new config. |
 | 2 | Read service CA, patch `Route/oauth-openshift` to reencrypt | Immediate conversion so iframe works without waiting for webhook timing |
 | 3 | Verify console headers | Confirm `X-Frame-Options` is gone |
 | 4 | Verify OAuth route | Confirm route is `reencrypt` and headers are stripped |
