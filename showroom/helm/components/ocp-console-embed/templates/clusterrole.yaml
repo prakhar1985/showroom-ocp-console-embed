@@ -13,7 +13,7 @@ rules:
     verbs:
       - get
       - patch
-  # Verify OAuth route status (read-only, used by Job for verification)
+  # Read and annotate OAuth route (triggers auth operator reconciliation)
   - apiGroups:
       - route.openshift.io
     resources:
@@ -22,3 +22,4 @@ rules:
       - oauth-openshift
     verbs:
       - get
+      - patch

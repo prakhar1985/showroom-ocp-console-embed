@@ -63,20 +63,30 @@ spec:
               echo "  IngressController/default patched."
 
               # -------------------------------------------------------
-              # Step 2: Wait for webhook to convert OAuth route
+              # Step 2: Trigger auth operator reconciliation
               # -------------------------------------------------------
-              # The mutating webhook intercepts auth operator writes and
-              # converts the OAuth route from passthrough to reencrypt.
-              # Wait for the operator's next reconciliation cycle (~60s).
+              # The webhook intercepts auth operator writes, but the operator
+              # only writes when it detects drift. Annotating the route triggers
+              # the operator's informer, causing it to reconcile and write --
+              # at which point the webhook mutates passthrough to reencrypt.
               echo ""
-              echo "Step 2: Waiting for webhook to convert OAuth route to reencrypt..."
+              echo "Step 2: Triggering auth operator reconciliation..."
 
+              oc annotate route oauth-openshift -n openshift-authentication \
+                ocp-console-embed/trigger="$(date +%s)" --overwrite 2>/dev/null || true
+
+              echo "  Waiting for webhook to convert OAuth route to reencrypt..."
               for i in $(seq 1 24); do
                 OAUTH_TLS=$(oc get route oauth-openshift -n openshift-authentication \
                   -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)
                 if [ "$OAUTH_TLS" = "reencrypt" ]; then
                   echo "  OAuth route is reencrypt (webhook working)."
                   break
+                fi
+                if [ "$i" -eq 12 ]; then
+                  echo "  Re-triggering reconciliation..."
+                  oc annotate route oauth-openshift -n openshift-authentication \
+                    ocp-console-embed/trigger="$(date +%s)" --overwrite 2>/dev/null || true
                 fi
                 echo "  Attempt $i/24: OAuth route is '${OAUTH_TLS}', waiting 5s..."
                 sleep 5
