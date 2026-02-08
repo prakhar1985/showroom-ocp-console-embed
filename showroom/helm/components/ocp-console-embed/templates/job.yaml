@@ -62,6 +62,20 @@ spec:
                 }"
               echo "  IngressController/default patched."
 
+              # Wait for router rollout (multi-node clusters have multiple
+              # router pods that need to pick up the new config)
+              echo "  Waiting for router rollout to complete..."
+              for i in $(seq 1 60); do
+                PROGRESSING=$(oc get ingresscontroller default -n openshift-ingress-operator \
+                  -o jsonpath='{.status.conditions[?(@.type=="Progressing")].status}' 2>/dev/null || true)
+                if [ "$PROGRESSING" = "False" ]; then
+                  echo "  Router rollout complete."
+                  break
+                fi
+                echo "  Attempt $i/60: Router still rolling out, waiting 5s..."
+                sleep 5
+              done
+
               # -------------------------------------------------------
               # Step 2: Patch OAuth route with reencrypt TLS
               # -------------------------------------------------------
