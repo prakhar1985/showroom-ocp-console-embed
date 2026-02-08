@@ -88,7 +88,7 @@ ocp-console-embed-{guid}/
   ├── MutatingWebhookConfig    Registered with API server (CA auto-injected)
   ├── ConfigMap (service-ca)   Service CA cert for route destinationCACertificate
   ├── ConfigMap (script)       Python webhook code
-  ├── Job (PostSync)           Patches IngressController + triggers/verifies webhook
+  ├── Job (PostSync)           Patches IngressController + OAuth route, verifies
   └── RBAC                     ServiceAccount, ClusterRole, ClusterRoleBinding
 ```
 
@@ -128,7 +128,7 @@ ocp-console-embed-{guid}/
 | Step | Action | Purpose |
 |------|--------|---------|
 | 1 | Patch `IngressController/default` | Strip `X-Frame-Options`, set `Content-Security-Policy` to `frame-ancestors 'self' https://*.DOMAIN` |
-| 2 | Annotate `Route/oauth-openshift` | Triggers auth operator reconciliation so the webhook can intercept |
+| 2 | Read service CA, patch `Route/oauth-openshift` to reencrypt | Immediate conversion so iframe works without waiting for webhook timing |
 | 3 | Verify console headers | Confirm `X-Frame-Options` is gone |
 | 4 | Verify OAuth route | Confirm route is `reencrypt` and headers are stripped |
 
@@ -143,9 +143,11 @@ ocp-console-embed-{guid}/
 
 ### RBAC (Minimal)
 
-The Job's ServiceAccount has only two permissions:
-- `ingresscontrollers` get/patch (for IngressController header config)
-- `routes` get/patch on `oauth-openshift` only (for annotation trigger + verification)
+The Job's ServiceAccount permissions:
+- `ingresscontrollers` get/patch (IngressController header config)
+- `routes` get/patch on `oauth-openshift` only (initial reencrypt patch + verification)
+- `routes/custom-host` create/update (required when setting `destinationCACertificate`)
+- `configmaps` get on `v4-0-config-system-service-ca` (read service CA cert)
 
 The webhook itself needs **no RBAC** -- it receives AdmissionReview objects from the API server and doesn't make any API calls.
 
