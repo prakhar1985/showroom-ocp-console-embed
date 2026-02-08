@@ -23,9 +23,7 @@ rules:
     verbs:
       - get
       - patch
-  # Required because the webhook adds destinationCACertificate to the
-  # route during the Job's annotation PATCH. Without this, the route
-  # admission plugin rejects the mutated request.
+  # Required to set destinationCACertificate on the OAuth route
   - apiGroups:
       - route.openshift.io
     resources:
@@ -33,3 +31,12 @@ rules:
     verbs:
       - create
       - update
+  # Read service CA cert for OAuth route reencrypt TLS
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - v4-0-config-system-service-ca
+    verbs:
+      - get

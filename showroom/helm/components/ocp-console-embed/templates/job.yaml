@@ -63,34 +63,51 @@ spec:
               echo "  IngressController/default patched."
 
               # -------------------------------------------------------
-              # Step 2: Trigger auth operator reconciliation
+              # Step 2: Patch OAuth route with reencrypt TLS
               # -------------------------------------------------------
-              # The webhook intercepts auth operator writes, but the operator
-              # only writes when it detects drift. Annotating the route triggers
-              # the operator's informer, causing it to reconcile and write --
-              # at which point the webhook mutates passthrough to reencrypt.
+              # The Job does the initial conversion from passthrough to
+              # reencrypt. The mutating webhook then maintains this state
+              # against auth operator reverts long-term.
               echo ""
-              echo "Step 2: Triggering auth operator reconciliation..."
+              echo "Step 2: Reading service CA cert..."
 
-              oc annotate route oauth-openshift -n openshift-authentication \
-                ocp-console-embed/trigger="$(date +%s)" --overwrite 2>/dev/null || true
+              SERVICE_CA=$(oc get configmap v4-0-config-system-service-ca \
+                -n openshift-authentication \
+                -o jsonpath='{.data.service-ca\.crt}' 2>/dev/null || true)
 
-              echo "  Waiting for webhook to convert OAuth route to reencrypt..."
-              for i in $(seq 1 24); do
-                OAUTH_TLS=$(oc get route oauth-openshift -n openshift-authentication \
-                  -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)
-                if [ "$OAUTH_TLS" = "reencrypt" ]; then
-                  echo "  OAuth route is reencrypt (webhook working)."
-                  break
-                fi
-                if [ "$i" -eq 12 ]; then
-                  echo "  Re-triggering reconciliation..."
-                  oc annotate route oauth-openshift -n openshift-authentication \
-                    ocp-console-embed/trigger="$(date +%s)" --overwrite 2>/dev/null || true
-                fi
-                echo "  Attempt $i/24: OAuth route is '${OAUTH_TLS}', waiting 5s..."
-                sleep 5
-              done
+              if [ -z "$SERVICE_CA" ]; then
+                echo "  WARNING: Could not read service CA."
+              else
+                echo "  Service CA cert retrieved."
+              fi
+
+              echo "  Patching Route/oauth-openshift with reencrypt TLS..."
+              if [ -n "$SERVICE_CA" ]; then
+                PATCH_FILE=$(mktemp)
+                python3 -c "
+              import json, sys
+              ca = sys.stdin.read()
+              patch = {
+                'spec': {
+                  'tls': {
+                    'termination': 'reencrypt',
+                    'insecureEdgeTerminationPolicy': 'Redirect',
+                    'destinationCACertificate': ca
+                  }
+                }
+              }
+              print(json.dumps(patch))
+              " <<< "$SERVICE_CA" > "$PATCH_FILE"
+
+                oc patch route oauth-openshift -n openshift-authentication \
+                  --type=merge \
+                  -p "$(cat "$PATCH_FILE")"
+                rm -f "$PATCH_FILE"
+                echo "  OAuth route patched with reencrypt TLS."
+              else
+                echo "  Skipping OAuth route patch (no service CA)."
+                echo "  The webhook will handle it when the operator reconciles."
+              fi
 
               # -------------------------------------------------------
               # Step 3: Verify X-Frame-Options is gone (Console)
