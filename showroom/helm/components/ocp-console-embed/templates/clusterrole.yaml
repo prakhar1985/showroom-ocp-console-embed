@@ -23,3 +23,13 @@ rules:
     verbs:
       - get
       - patch
+  # Required because the webhook adds destinationCACertificate to the
+  # route during the Job's annotation PATCH. Without this, the route
+  # admission plugin rejects the mutated request.
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes/custom-host
+    verbs:
+      - create
+      - update
