@@ -23,11 +23,15 @@ spec:
             - -ce
             - |
               DOMAIN="{{ .Values.deployer.domain }}"
+              GUID="{{ .Values.deployer.guid }}"
+              NUM_USERS={{ int .Values.deployer.numUsers }}
               CONSOLE_HOST="console-openshift-console.${DOMAIN}"
               OAUTH_HOST="oauth-openshift.${DOMAIN}"
 
               echo "=== OCP Console Embed: Setup ==="
               echo "Domain: ${DOMAIN}"
+              echo "GUID: ${GUID}"
+              echo "NumUsers: ${NUM_USERS}"
               echo ""
 
               # -------------------------------------------------------
@@ -35,7 +39,18 @@ spec:
               # -------------------------------------------------------
               echo "Step 1: Patching IngressController/default (delete X-Frame-Options, set CSP frame-ancestors)..."
 
-              CSP_VALUE="frame-ancestors 'self' https://*.${DOMAIN}"
+              # Build CSP with only specific Showroom route hostnames
+              # instead of allowing all *.DOMAIN routes (clickjacking mitigation)
+              ALLOWED_ORIGINS="'self'"
+              if [ "$NUM_USERS" -gt 0 ]; then
+                for i in $(seq 1 $NUM_USERS); do
+                  ALLOWED_ORIGINS="${ALLOWED_ORIGINS} https://showroom-showroom-${GUID}-user${i}.${DOMAIN}"
+                done
+              else
+                ALLOWED_ORIGINS="${ALLOWED_ORIGINS} https://showroom-showroom-${GUID}-admin.${DOMAIN}"
+              fi
+              CSP_VALUE="frame-ancestors ${ALLOWED_ORIGINS}"
+              echo "  CSP: ${CSP_VALUE}"
 
               oc patch ingresscontroller default -n openshift-ingress-operator \
                 --type=merge \

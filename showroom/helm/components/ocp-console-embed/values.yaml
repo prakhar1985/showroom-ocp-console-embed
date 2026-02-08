@@ -7,3 +7,5 @@ ocpConsoleEmbed:
 # Injected by parent chart
 deployer:
   domain: ""
+  guid: ""
+  numUsers: 0

@@ -96,6 +96,8 @@ spec:
       valuesObject:
         deployer:
           domain: {{ .Values.deployer.domain | quote }}
+          guid: {{ $guid | quote }}
+          numUsers: {{ int .Values.numUsers }}
         ocpConsoleEmbed:
           name: ocp-console-embed-{{ $guid }}
           namespace: ocp-console-embed-{{ $guid }}
