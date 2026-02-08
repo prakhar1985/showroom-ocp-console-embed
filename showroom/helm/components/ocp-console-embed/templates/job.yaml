@@ -1,5 +1,6 @@
 # One-time Job that patches the default IngressController to strip
-# iframe-blocking headers and configures the OAuth route with reencrypt TLS.
+# iframe-blocking headers and verifies the webhook has taken effect
+# on the OAuth route.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,7 +26,7 @@ spec:
               CONSOLE_HOST="console-openshift-console.${DOMAIN}"
               OAUTH_HOST="oauth-openshift.${DOMAIN}"
 
-              echo "=== OCP Console Embed: Default IngressController Setup ==="
+              echo "=== OCP Console Embed: Setup ==="
               echo "Domain: ${DOMAIN}"
               echo ""
 
@@ -34,9 +35,6 @@ spec:
               # -------------------------------------------------------
               echo "Step 1: Patching IngressController/default (delete X-Frame-Options, set CSP frame-ancestors)..."
 
-              # Set CSP frame-ancestors instead of deleting CSP entirely.
-              # This restricts framing to same-cluster origins only, retaining
-              # XSS protection for all other CSP directives.
               CSP_VALUE="frame-ancestors 'self' https://*.${DOMAIN}"
 
               oc patch ingresscontroller default -n openshift-ingress-operator \
@@ -65,74 +63,30 @@ spec:
               echo "  IngressController/default patched."
 
               # -------------------------------------------------------
-              # Step 2: Set auth operator to Unmanaged
+              # Step 2: Wait for webhook to convert OAuth route
               # -------------------------------------------------------
-              # The auth operator reverts the OAuth route to passthrough within
-              # seconds (watch-based reconciliation). Setting Unmanaged stops
-              # reconciliation so the reencrypt patch sticks. The operator pod
-              # stays running, CVO stays healthy, OAuth continues to work.
+              # The mutating webhook intercepts auth operator writes and
+              # converts the OAuth route from passthrough to reencrypt.
+              # Wait for the operator's next reconciliation cycle (~60s).
               echo ""
-              echo "Step 2: Setting authentication operator to Unmanaged..."
+              echo "Step 2: Waiting for webhook to convert OAuth route to reencrypt..."
 
-              oc patch authentication.operator.openshift.io cluster \
-                --type=merge \
-                -p '{"spec":{"managementState":"Unmanaged"}}'
-              echo "  Authentication operator set to Unmanaged."
-
-              # -------------------------------------------------------
-              # Step 3: Read service CA for OAuth route reencrypt TLS
-              # -------------------------------------------------------
-              echo ""
-              echo "Step 3: Reading service CA cert..."
-
-              SERVICE_CA=$(oc get configmap v4-0-config-system-service-ca \
-                -n openshift-authentication \
-                -o jsonpath='{.data.service-ca\.crt}' 2>/dev/null || true)
-
-              if [ -z "$SERVICE_CA" ]; then
-                echo "  WARNING: Could not read service CA. OAuth route patch may fail."
-              else
-                echo "  Service CA cert retrieved."
-              fi
+              for i in $(seq 1 24); do
+                OAUTH_TLS=$(oc get route oauth-openshift -n openshift-authentication \
+                  -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)
+                if [ "$OAUTH_TLS" = "reencrypt" ]; then
+                  echo "  OAuth route is reencrypt (webhook working)."
+                  break
+                fi
+                echo "  Attempt $i/24: OAuth route is '${OAUTH_TLS}', waiting 5s..."
+                sleep 5
+              done
 
               # -------------------------------------------------------
-              # Step 4: Patch OAuth route with reencrypt TLS
+              # Step 3: Verify X-Frame-Options is gone (Console)
               # -------------------------------------------------------
               echo ""
-              echo "Step 4: Patching Route/oauth-openshift with reencrypt TLS..."
-
-              if [ -n "$SERVICE_CA" ]; then
-                # Build the patch JSON with service CA for reencrypt
-                PATCH_FILE=$(mktemp)
-                python3 -c "
-              import json, sys
-              ca = sys.stdin.read()
-              patch = {
-                'spec': {
-                  'tls': {
-                    'termination': 'reencrypt',
-                    'insecureEdgeTerminationPolicy': 'Redirect',
-                    'destinationCACertificate': ca
-                  }
-                }
-              }
-              print(json.dumps(patch))
-              " <<< "$SERVICE_CA" > "$PATCH_FILE"
-
-                oc patch route oauth-openshift -n openshift-authentication \
-                  --type=merge \
-                  -p "$(cat "$PATCH_FILE")"
-                rm -f "$PATCH_FILE"
-                echo "  OAuth route patched with reencrypt TLS + service CA."
-              else
-                echo "  Skipping OAuth route patch (no service CA available)."
-              fi
-
-              # -------------------------------------------------------
-              # Step 5: Verify X-Frame-Options is gone (Console)
-              # -------------------------------------------------------
-              echo ""
-              echo "Step 5: Verifying console X-Frame-Options is stripped..."
+              echo "Step 3: Verifying console X-Frame-Options is stripped..."
               echo "  Console URL: https://${CONSOLE_HOST}"
 
               for i in $(seq 1 30); do
@@ -152,16 +106,16 @@ spec:
               done
 
               # -------------------------------------------------------
-              # Step 6: Verify OAuth route
+              # Step 4: Verify OAuth route
               # -------------------------------------------------------
               echo ""
-              echo "Step 6: Checking OAuth route status..."
+              echo "Step 4: Checking OAuth route headers..."
+
               OAUTH_TLS=$(oc get route oauth-openshift -n openshift-authentication \
                 -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)
               echo "  OAuth route TLS termination: ${OAUTH_TLS}"
 
               if [ "$OAUTH_TLS" = "reencrypt" ]; then
-                echo "  OAuth route is reencrypt. Checking headers..."
                 for i in $(seq 1 10); do
                   HEADERS=$(curl -skI "https://${OAUTH_HOST}" 2>/dev/null || true)
                   if echo "$HEADERS" | grep -qi "x-frame-options"; then
@@ -175,12 +129,9 @@ spec:
                   fi
                 done
               else
-                echo "  OAuth route is ${OAUTH_TLS} (auth operator may revert to passthrough)."
-                echo "  The CronJob will re-patch periodically."
+                echo "  WARNING: OAuth route is still ${OAUTH_TLS}."
+                echo "  The webhook may need more time. Check webhook pod logs."
               fi
 
               echo ""
               echo "=== OCP Console Embed: Setup Complete ==="
-              echo ""
-              echo "Showroom ui-config.yml should use:"
-              echo "  url: 'https://console-openshift-console.\${DOMAIN}'"

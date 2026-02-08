@@ -1,0 +1,112 @@
+# ConfigMap containing the mutating webhook Python script.
+# Converts OAuth route from passthrough to reencrypt TLS so HAProxy
+# can strip X-Frame-Options headers for iframe embedding.
+# The auth operator stays fully Managed -- it reconciles normally,
+# handles cert rotation, and manages OAuth pods. The webhook only
+# changes the TLS termination type on each write.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.ocpConsoleEmbed.name }}-webhook-script
+  namespace: {{ .Values.ocpConsoleEmbed.namespace }}
+data:
+  webhook.py: |
+    #!/usr/bin/env python3
+    import base64
+    import json
+    import os
+    import ssl
+    import sys
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    TLS_CERT = os.environ.get('TLS_CERT_PATH', '/tls/tls.crt')
+    TLS_KEY = os.environ.get('TLS_KEY_PATH', '/tls/tls.key')
+    SERVICE_CA_PATH = os.environ.get('SERVICE_CA_PATH', '/service-ca/service-ca.crt')
+
+    def load_service_ca():
+        try:
+            with open(SERVICE_CA_PATH) as f:
+                ca = f.read().strip()
+            if ca:
+                print(f"[webhook] Loaded service CA ({len(ca)} bytes)", flush=True)
+                return ca
+        except FileNotFoundError:
+            pass
+        print("[webhook] WARNING: No service CA found", flush=True)
+        return None
+
+    SERVICE_CA = load_service_ca()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/healthz':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(b'ok')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self):
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length))
+            uid = body['request']['uid']
+            try:
+                resp = self.handle_review(body, uid)
+            except Exception as e:
+                print(f"[webhook] Error: {e}", file=sys.stderr, flush=True)
+                resp = self.allow(uid)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode())
+
+        def handle_review(self, body, uid):
+            obj = body['request'].get('object', {})
+            name = obj.get('metadata', {}).get('name', '')
+            ns = obj.get('metadata', {}).get('namespace', '')
+            tls = obj.get('spec', {}).get('tls', {})
+            termination = tls.get('termination', '')
+
+            if name != 'oauth-openshift' or ns != 'openshift-authentication':
+                return self.allow(uid)
+            if termination != 'passthrough':
+                return self.allow(uid)
+            if not SERVICE_CA:
+                return self.allow(uid)
+
+            patches = [
+                {"op": "replace", "path": "/spec/tls/termination", "value": "reencrypt"},
+                {"op": "add", "path": "/spec/tls/insecureEdgeTerminationPolicy", "value": "Redirect"},
+                {"op": "add", "path": "/spec/tls/destinationCACertificate", "value": SERVICE_CA},
+            ]
+            print(f"[webhook] Mutating Route/{name}: passthrough -> reencrypt", flush=True)
+            return {
+                "apiVersion": "admission.k8s.io/v1",
+                "kind": "AdmissionReview",
+                "response": {
+                    "uid": uid,
+                    "allowed": True,
+                    "patchType": "JSONPatch",
+                    "patch": base64.b64encode(json.dumps(patches).encode()).decode()
+                }
+            }
+
+        def allow(self, uid):
+            return {
+                "apiVersion": "admission.k8s.io/v1",
+                "kind": "AdmissionReview",
+                "response": {"uid": uid, "allowed": True}
+            }
+
+        def log_message(self, fmt, *args):
+            pass
+
+    if __name__ == '__main__':
+        server = HTTPServer(('0.0.0.0', 8443), Handler)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        print("[webhook] OAuth route mutating webhook listening on :8443", flush=True)
+        server.serve_forever()

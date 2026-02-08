@@ -1,0 +1,69 @@
+# Deployment for the OAuth route mutating webhook.
+# Runs a Python HTTP server that intercepts Route writes in
+# openshift-authentication and converts passthrough to reencrypt.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.ocpConsoleEmbed.name }}-webhook
+  namespace: {{ .Values.ocpConsoleEmbed.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.ocpConsoleEmbed.name }}-webhook
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.ocpConsoleEmbed.name }}-webhook
+    spec:
+      serviceAccountName: {{ .Values.ocpConsoleEmbed.name }}
+      containers:
+        - name: webhook
+          image: {{ .Values.ocpConsoleEmbed.image }}
+          command:
+            - python3
+            - /webhook/webhook.py
+          ports:
+            - containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: service-ca
+              mountPath: /service-ca
+              readOnly: true
+            - name: script
+              mountPath: /webhook
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.ocpConsoleEmbed.name }}-webhook-tls
+        - name: service-ca
+          configMap:
+            name: {{ .Values.ocpConsoleEmbed.name }}-service-ca
+        - name: script
+          configMap:
+            name: {{ .Values.ocpConsoleEmbed.name }}-webhook-script

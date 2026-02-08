@@ -13,40 +13,12 @@ rules:
     verbs:
       - get
       - patch
-  # Patch OAuth route with reencrypt TLS
+  # Verify OAuth route status (read-only, used by Job for verification)
   - apiGroups:
       - route.openshift.io
     resources:
       - routes
     resourceNames:
       - oauth-openshift
-    verbs:
-      - get
-      - patch
-  # Required to set destinationCACertificate on the OAuth route
-  - apiGroups:
-      - route.openshift.io
-    resources:
-      - routes/custom-host
-    verbs:
-      - create
-      - update
-  # Set authentication operator to Unmanaged so it stops reverting the OAuth route
-  - apiGroups:
-      - operator.openshift.io
-    resources:
-      - authentications
-    resourceNames:
-      - cluster
-    verbs:
-      - get
-      - patch
-  # Read service CA cert from openshift-authentication
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    resourceNames:
-      - v4-0-config-system-service-ca
     verbs:
       - get
