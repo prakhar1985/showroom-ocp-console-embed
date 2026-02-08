@@ -15,6 +15,7 @@ We need the OpenShift Console to appear inside a Showroom iframe so lab particip
 | **If login breaks during lab** | Nobody can fix it automatically | Operator self-heals as usual |
 | **After the lab ends** | Cluster stays broken | Cluster automatically returns to normal |
 | **Long-running clusters** | Dangerous | Safe |
+| **Clickjacking protection** | None -- any site on the internet can frame the console | Only Showroom routes can frame the console |
 
 ## How It Works (The Short Version)
 
@@ -45,6 +46,7 @@ The filter is removed automatically when the lab ends. The operator's next write
 - Authentication operator stays **fully Managed** -- cert rotation, pod management, self-healing all work
 - CVO reports **healthy** -- no degraded operators
 - No ResourceQuota hacks, no operator killing, no permanent cluster modifications
+- CSP `frame-ancestors` restricted to **only Showroom routes** -- other apps on the cluster cannot frame the console (clickjacking mitigation)
 - Automatic cleanup via ArgoCD prune
 
 ### For RHDP operations
@@ -62,7 +64,7 @@ The filter is removed automatically when the lab ends. The operator's next write
 
 Two routes need iframe embedding:
 
-1. **Console route** (`console-openshift-console.*`) -- Uses `reencrypt` TLS. The HAProxy router can modify HTTP headers on reencrypt routes. We patch the IngressController to strip `X-Frame-Options` and set a restrictive `Content-Security-Policy`. This works immediately.
+1. **Console route** (`console-openshift-console.*`) -- Uses `reencrypt` TLS. The HAProxy router can modify HTTP headers on reencrypt routes. We patch the IngressController to strip `X-Frame-Options` and set a `Content-Security-Policy` that only allows the specific Showroom routes to frame the console (not all `*.DOMAIN` routes -- this prevents clickjacking by other apps on the cluster). This works immediately.
 
 2. **OAuth route** (`oauth-openshift.*`) -- Uses `passthrough` TLS. HAProxy acts as a TCP proxy and cannot touch HTTP headers. The route must be converted to `reencrypt` for header stripping to work. But the authentication operator watches this route and reverts any TLS change back to `passthrough` within 3 seconds via watch-based reconciliation.
 
@@ -106,7 +108,7 @@ ocp-console-embed-{guid}/
          ▼                              ▼
    Showroom Pod                  IngressController (default)
    ├── nginx                     ├── X-Frame-Options: DELETED
-   ├── content                   └── CSP: frame-ancestors *.DOMAIN
+   ├── content                   └── CSP: frame-ancestors showroom-*.DOMAIN only
    └── terminal
                                         │
                             ┌───────────┴───────────┐
@@ -128,7 +130,7 @@ ocp-console-embed-{guid}/
 
 | Step | Action | Purpose |
 |------|--------|---------|
-| 1 | Patch `IngressController/default` | Strip `X-Frame-Options`, set `Content-Security-Policy` to `frame-ancestors 'self' https://*.DOMAIN` |
+| 1 | Patch `IngressController/default` | Strip `X-Frame-Options`, set `Content-Security-Policy` to `frame-ancestors 'self'` + only the specific Showroom route URLs (not all `*.DOMAIN`) |
 | 1b | Wait for router rollout | Polls `IngressController` status until `Progressing=False`. On SNO (1 router pod) this is instant. On multi-node (3 router pods) this waits for all pods to pick up the new config. |
 | 2 | Read service CA, patch `Route/oauth-openshift` to reencrypt | Immediate conversion so iframe works without waiting for webhook timing |
 | 3 | Verify console headers | Confirm `X-Frame-Options` is gone |
