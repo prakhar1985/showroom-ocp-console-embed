@@ -62,10 +62,23 @@ data:
           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
           proxy_set_header X-Forwarded-Proto $scheme;
         }
-        {{- if .Values.showroom.terminal.enabled }}
+        {{- if and .Values.showroom.terminal.enabled (eq .Values.showroom.terminal.type "ocp") }}
         location /terminal/ {
           proxy_pass http://127.0.0.1:7681;
           rewrite ^/terminal/(.*)$ /$1 break;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_read_timeout 43200000;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header Host $http_host;
+          proxy_set_header X-NginX-Proxy true;
+        }
+        {{- end }}
+        {{- if and .Values.showroom.terminal.enabled (ne .Values.showroom.terminal.type "ocp") }}
+        location ^~ /wetty {
+          proxy_pass http://127.0.0.1:7681/wetty;
           proxy_http_version 1.1;
           proxy_set_header Upgrade $http_upgrade;
           proxy_set_header Connection "upgrade";
@@ -197,35 +210,6 @@ spec:
         - mountPath: /showroom/www
           name: showroom-files
           subPath: www
-      {{- if and .Values.showroom.terminal.enabled .Values.showroom.terminal.bastion.host }}
-      - name: terminal-setup
-        image: "busybox:latest"
-        command: ["sh", "-c"]
-        args:
-        - |
-          cat > /home/lab-user/.bashrc << 'BASHRC'
-          if [ -z "$_BASTION_DONE" ] && [ -n "$BASTION_HOST" ]; then
-            export _BASTION_DONE=1
-            echo ""
-            echo "Connecting to $BASTION_HOST..."
-            echo ""
-            if [ "$TERMINAL_TYPE" = "tmux" ]; then
-              TMUX_FLAG="-t 'tmux new-session -A -s lab'"
-            else
-              TMUX_FLAG=""
-            fi
-            if command -v sshpass &>/dev/null; then
-              eval sshpass -p \"\$BASTION_PASSWORD\" ssh -o StrictHostKeyChecking=no -p \${BASTION_PORT:-22} \${BASTION_USER}@\${BASTION_HOST} $TMUX_FLAG
-            else
-              eval ssh -o StrictHostKeyChecking=no -p \${BASTION_PORT:-22} \${BASTION_USER}@\${BASTION_HOST} $TMUX_FLAG
-            fi
-            exit $?
-          fi
-          BASHRC
-        volumeMounts:
-        - name: terminal-lab-user-home
-          mountPath: /home/lab-user
-      {{- end }}
       containers:
       - name: nginx
         image: "quay.io/rhpds/nginx:1.25"
@@ -286,7 +270,7 @@ spec:
           httpGet:
             path: /
             port: 8000
-      {{- if .Values.showroom.terminal.enabled }}
+      {{- if and .Values.showroom.terminal.enabled (eq .Values.showroom.terminal.type "ocp") }}
       - name: terminal
         image: {{ .Values.showroom.terminal.image | quote }}
         imagePullPolicy: IfNotPresent
@@ -295,21 +279,39 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        {{- if .Values.showroom.terminal.bastion.host }}
-        - name: BASTION_HOST
-          value: {{ .Values.showroom.terminal.bastion.host | quote }}
-        - name: BASTION_USER
-          value: {{ .Values.showroom.terminal.bastion.user | quote }}
-        - name: BASTION_PASSWORD
-          value: {{ .Values.showroom.terminal.bastion.password | quote }}
-        - name: BASTION_PORT
-          value: {{ .Values.showroom.terminal.bastion.port | default "22" | quote }}
-        - name: TERMINAL_TYPE
-          value: {{ .Values.showroom.terminal.type | default "bastion" | quote }}
-        {{- end }}
         volumeMounts:
         - name: terminal-lab-user-home
           mountPath: /home/lab-user
+        ports:
+        - containerPort: 7681
+          protocol: TCP
+        resources:
+          limits:
+            cpu: {{ .Values.showroom.terminal.resources.limits.cpu }}
+            memory: {{ .Values.showroom.terminal.resources.limits.memory }}
+          requests:
+            cpu: {{ .Values.showroom.terminal.resources.requests.cpu }}
+            memory: {{ .Values.showroom.terminal.resources.requests.memory }}
+      {{- end }}
+      {{- if and .Values.showroom.terminal.enabled (ne .Values.showroom.terminal.type "ocp") }}
+      - name: wetty
+        image: {{ .Values.showroom.terminal.wettyImage | default "quay.io/rhpds/wetty:v2.5" | quote }}
+        imagePullPolicy: IfNotPresent
+        args:
+        - --base=/wetty/
+        - --port=7681
+        {{- if .Values.showroom.terminal.bastion.host }}
+        - --ssh-host={{ .Values.showroom.terminal.bastion.host }}
+        - --ssh-port={{ .Values.showroom.terminal.bastion.port | default "22" }}
+        - --ssh-user={{ .Values.showroom.terminal.bastion.user }}
+        - --ssh-auth=password
+        - --ssh-pass={{ .Values.showroom.terminal.bastion.password }}
+        {{- end }}
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         ports:
         - containerPort: 7681
           protocol: TCP
