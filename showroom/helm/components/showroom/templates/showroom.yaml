@@ -41,17 +41,14 @@ data:
     (function () {
       'use strict';
       /*
-       * Three-state panel toggle for Showroom:
-       *   "split"  – both panes visible (default)
-       *   "console" – instructions hidden, console full-width
-       *   "instructions" – console hidden, instructions full-width
+       * Showroom panel mode switcher.
        *
-       * Two buttons sit on the divider:
-       *   Left chevron  (◀) – hide instructions → full console
-       *   Right chevron (▶) – hide console → full instructions
-       * When a pane is hidden, a restore button appears at that edge.
+       * A floating toolbar at the bottom-center lets users switch between:
+       *   "instructions" – lab guide full-width (read the step)
+       *   "split"        – both panes side by side
+       *   "console"      – console/tabs full-width (do the task)
        *
-       * Keyboard: Ctrl+1 = full instructions, Ctrl+2 = split, Ctrl+3 = full console
+       * Keyboard: Ctrl+1 = instructions, Ctrl+2 = split, Ctrl+3 = console
        */
       var STORE_KEY = 'sr-panel-mode';
       var DEFAULT_MODE = '{{ .Values.showroom.panelMode | default "instructions" }}';
@@ -71,140 +68,132 @@ data:
         var right = gutter.nextElementSibling;
         if (!left || !right) return;
 
-        var origLeft  = left.style.width  || left.style.flexBasis || '';
-        var origRight = right.style.width || right.style.flexBasis || '';
-
         /* ── styles ───────────────────────────────────────── */
         var css = document.createElement('style');
         css.textContent = [
-          '.sr-btn{',
-          '  position:fixed;z-index:99999;',
-          '  width:24px;height:40px;border:1px solid #bbb;',
-          '  background:#fff;cursor:pointer;',
-          '  font-size:11px;padding:0;color:#555;',
-          '  box-shadow:2px 0 6px rgba(0,0,0,.12);',
-          '  display:flex;align-items:center;justify-content:center;',
-          '  transition:background .15s;',
+          /* Floating toolbar */
+          '.sr-toolbar{',
+          '  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);',
+          '  z-index:99999;display:flex;align-items:center;gap:0;',
+          '  background:#1a1a1a;border-radius:10px;',
+          '  box-shadow:0 4px 20px rgba(0,0,0,.3),0 0 0 1px rgba(255,255,255,.08);',
+          '  padding:4px;',
+          '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
           '}',
-          '.sr-btn:hover{background:#e8e8e8}',
-          '.sr-btn svg{width:14px;height:14px;fill:currentColor}',
-          /* Top button: hide instructions / show instructions */
-          '.sr-btn-left{',
-          '  top:calc(50% - 24px);border-left:0;',
-          '  border-radius:0 5px 0 0;',
+          /* Individual mode buttons */
+          '.sr-mode-btn{',
+          '  display:flex;align-items:center;gap:6px;',
+          '  padding:8px 16px;border:none;border-radius:7px;',
+          '  cursor:pointer;font-size:13px;font-weight:500;',
+          '  color:#999;background:transparent;',
+          '  transition:all .2s ease;white-space:nowrap;',
+          '  line-height:1;',
           '}',
-          /* Bottom button: hide console / show console */
-          '.sr-btn-right{',
-          '  top:50%;border-left:0;border-top:0;',
-          '  border-radius:0 0 5px 0;',
+          '.sr-mode-btn:hover{color:#fff;background:rgba(255,255,255,.08)}',
+          '.sr-mode-btn.sr-active{',
+          '  color:#fff;background:#ee0000;',
+          '  box-shadow:0 2px 8px rgba(238,0,0,.4);',
           '}',
-          /* Label shown when a pane is hidden */
-          '.sr-label{',
-          '  position:fixed;z-index:99998;',
-          '  background:#333;color:#fff;font-size:11px;',
-          '  padding:4px 10px;border-radius:3px;',
-          '  pointer-events:none;white-space:nowrap;',
-          '  opacity:0;transition:opacity .2s;',
+          '.sr-mode-btn svg{width:16px;height:16px;fill:currentColor;flex-shrink:0}',
+          /* Separator between buttons */
+          '.sr-sep{width:1px;height:20px;background:rgba(255,255,255,.12);flex-shrink:0}',
+          /* Hint tooltip on first visit */
+          '.sr-hint{',
+          '  position:fixed;bottom:72px;left:50%;transform:translateX(-50%);',
+          '  z-index:99999;background:#1a1a1a;color:#ccc;',
+          '  font-size:12px;padding:8px 14px;border-radius:8px;',
+          '  box-shadow:0 4px 16px rgba(0,0,0,.3);',
+          '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
+          '  white-space:nowrap;opacity:1;transition:opacity .5s;pointer-events:none;',
           '}',
-          '.sr-btn:hover+.sr-label{opacity:1}',
+          '.sr-hint::after{',
+          '  content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);',
+          '  border:6px solid transparent;border-top-color:#1a1a1a;',
+          '}',
         ].join('\n');
         document.head.appendChild(css);
 
         /* ── SVG icons ────────────────────────────────────── */
-        var icoLeft  = '<svg viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>';
-        var icoRight = '<svg viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>';
-        /* doc icon for "show instructions" */
-        var icoDoc   = '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z"/></svg>';
-        /* monitor icon for "show console" */
-        var icoMon   = '<svg viewBox="0 0 24 24"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>';
+        var icoDoc = '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/></svg>';
+        var icoSplit = '<svg viewBox="0 0 24 24"><path d="M3 3h8v18H3V3zm10 0h8v18h-8V3zM5 5v14h4V5H5zm10 0v14h4V5h-4z"/></svg>';
+        var icoMon = '<svg viewBox="0 0 24 24"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>';
 
-        /* ── create buttons ───────────────────────────────── */
-        var btnL = document.createElement('button');
-        btnL.className = 'sr-btn sr-btn-left';
-        document.body.appendChild(btnL);
+        /* ── build toolbar ────────────────────────────────── */
+        var toolbar = document.createElement('div');
+        toolbar.className = 'sr-toolbar';
 
-        var btnR = document.createElement('button');
-        btnR.className = 'sr-btn sr-btn-right';
-        document.body.appendChild(btnR);
+        var btnI = document.createElement('button');
+        btnI.className = 'sr-mode-btn';
+        btnI.innerHTML = icoDoc + '<span>Instructions</span>';
+        btnI.title = 'Full-width instructions (Ctrl+1)';
+        btnI.setAttribute('data-mode', 'instructions');
 
-        var mode = 'split'; /* split | console | instructions */
+        var sep1 = document.createElement('div');
+        sep1.className = 'sr-sep';
 
-        function hidePane(el) {
-          el.style.display = 'none';
-          el.style.width = '0';
-          if (el.style.flexBasis !== undefined) el.style.flexBasis = '0';
-        }
-        function fullPane(el) {
-          el.style.display = '';
-          el.style.width = '100%';
-          if (el.style.flexBasis !== undefined) el.style.flexBasis = '100%';
-        }
-        function restorePane(el, orig) {
-          el.style.display = '';
-          el.style.width = orig || '';
-          if (el.style.flexBasis !== undefined) el.style.flexBasis = orig || '';
-        }
+        var btnS = document.createElement('button');
+        btnS.className = 'sr-mode-btn';
+        btnS.innerHTML = icoSplit + '<span>Split</span>';
+        btnS.title = 'Side by side (Ctrl+2)';
+        btnS.setAttribute('data-mode', 'split');
 
+        var sep2 = document.createElement('div');
+        sep2.className = 'sr-sep';
+
+        var btnC = document.createElement('button');
+        btnC.className = 'sr-mode-btn';
+        btnC.innerHTML = icoMon + '<span>Console</span>';
+        btnC.title = 'Full-width console (Ctrl+3)';
+        btnC.setAttribute('data-mode', 'console');
+
+        toolbar.appendChild(btnI);
+        toolbar.appendChild(sep1);
+        toolbar.appendChild(btnS);
+        toolbar.appendChild(sep2);
+        toolbar.appendChild(btnC);
+        document.body.appendChild(toolbar);
+
+        var buttons = { instructions: btnI, split: btnS, console: btnC };
+        var mode = 'split';
+
+        /* ── panel manipulation ───────────────────────────── */
         function apply() {
+          /* Update button highlights */
+          btnI.classList.toggle('sr-active', mode === 'instructions');
+          btnS.classList.toggle('sr-active', mode === 'split');
+          btnC.classList.toggle('sr-active', mode === 'console');
+
           if (mode === 'split') {
-            restorePane(left, origLeft);
-            restorePane(right, origRight);
+            left.style.cssText = '';
+            right.style.cssText = '';
             gutter.style.display = '';
-            window.dispatchEvent(new Event('resize'));
-            /* Position both buttons on the gutter */
-            var r = left.getBoundingClientRect();
-            var x = Math.max(0, r.right - 12);
-            btnL.style.left = x + 'px';
-            btnL.innerHTML = icoLeft;
-            btnL.title = 'Full-width console  (Ctrl+3)';
-            btnR.style.left = x + 'px';
-            btnR.innerHTML = icoRight;
-            btnR.title = 'Full-width instructions  (Ctrl+1)';
-            btnR.style.display = '';
+            /* Let Split.js recalculate */
+            setTimeout(function () {
+              window.dispatchEvent(new Event('resize'));
+            }, 50);
           } else if (mode === 'console') {
-            hidePane(left);
-            fullPane(right);
+            left.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
             gutter.style.display = 'none';
-            /* Show restore button at left edge */
-            btnL.style.left = '0px';
-            btnL.innerHTML = icoDoc;
-            btnL.title = 'Show instructions  (Ctrl+1)';
-            /* Hide second button */
-            btnR.style.display = 'none';
+            right.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
           } else if (mode === 'instructions') {
-            hidePane(right);
-            fullPane(left);
+            right.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
             gutter.style.display = 'none';
-            /* Show restore button at right edge — use btnL repositioned */
-            btnL.style.left = 'calc(100% - 26px)';
-            btnL.innerHTML = icoMon;
-            btnL.title = 'Show console  (Ctrl+3)';
-            btnR.style.display = 'none';
+            left.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
           }
           try { localStorage.setItem(STORE_KEY, mode); } catch (e) {}
         }
 
         function setMode(m) { mode = m; apply(); }
 
-        btnL.addEventListener('click', function (e) {
-          e.preventDefault(); e.stopPropagation();
-          if (mode === 'split') setMode('console');
-          else if (mode === 'console') setMode('split');
-          else if (mode === 'instructions') setMode('split');
+        /* ── button clicks ────────────────────────────────── */
+        toolbar.addEventListener('click', function (e) {
+          var btn = e.target.closest('.sr-mode-btn');
+          if (!btn) return;
+          e.preventDefault();
+          setMode(btn.getAttribute('data-mode'));
         });
 
-        btnR.addEventListener('click', function (e) {
-          e.preventDefault(); e.stopPropagation();
-          if (mode === 'split') setMode('instructions');
-          else setMode('split');
-        });
-
-        /* Double-click gutter → full console */
-        gutter.addEventListener('dblclick', function (e) {
-          e.preventDefault(); setMode('console');
-        });
-
-        /* Keyboard: Ctrl+1 = instructions, Ctrl+2 = split, Ctrl+3 = console */
+        /* ── keyboard shortcuts ───────────────────────────── */
         document.addEventListener('keydown', function (e) {
           if (!e.ctrlKey) return;
           if (e.key === '1') { e.preventDefault(); setMode('instructions'); }
@@ -212,25 +201,23 @@ data:
           if (e.key === '3') { e.preventDefault(); setMode('console'); }
         });
 
-        /* Reposition on resize / drag */
-        window.addEventListener('resize', function () {
-          if (mode === 'split') {
-            var r = left.getBoundingClientRect();
-            var x = Math.max(0, r.right - 12);
-            btnL.style.left = x + 'px';
-            btnR.style.left = x + 'px';
+        /* ── first-visit hint ─────────────────────────────── */
+        var hintKey = 'sr-hint-dismissed';
+        try {
+          if (!localStorage.getItem(hintKey)) {
+            var hint = document.createElement('div');
+            hint.className = 'sr-hint';
+            hint.textContent = 'Use the toolbar below to switch views \u2022 Ctrl+1 / Ctrl+2 / Ctrl+3';
+            document.body.appendChild(hint);
+            localStorage.setItem(hintKey, '1');
+            setTimeout(function () {
+              hint.style.opacity = '0';
+              setTimeout(function () { hint.remove(); }, 600);
+            }, 6000);
           }
-        });
-        new MutationObserver(function () {
-          if (mode === 'split') {
-            var r = left.getBoundingClientRect();
-            var x = Math.max(0, r.right - 12);
-            btnL.style.left = x + 'px';
-            btnR.style.left = x + 'px';
-          }
-        }).observe(left, { attributes: true, attributeFilter: ['style'] });
+        } catch (e) {}
 
-        /* Restore saved mode, or use configured default on first visit */
+        /* ── restore saved mode ───────────────────────────── */
         try {
           var saved = localStorage.getItem(STORE_KEY);
           if (saved === 'console' || saved === 'instructions' || saved === 'split') {
