@@ -17,9 +17,9 @@ showroom:
     bundleUrl: "https://github.com/rhpds/nookbag/releases/download/nookbag-v0.2.1/nookbag-v0.2.1.zip"
 
   # Terminal configuration
-  #   type: ocp     - In-pod ttyd shell (uses terminal.image)
-  #   type: bastion - Wetty SSH to bastion host (uses terminal.wettyImage)
-  #   type: tmux    - Wetty SSH + tmux on bastion (uses terminal.wettyImage)
+  #   type: ocp   - In-pod ttyd shell (uses terminal.image)
+  #   type: wetty - Wetty SSH to bastion host (uses terminal.wettyImage)
+  #   type: tmux  - Wetty SSH + tmux on bastion (uses terminal.wettyImage)
   terminal:
     enabled: true
     # OCP terminal image (used when type=ocp)

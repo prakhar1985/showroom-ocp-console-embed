@@ -196,8 +196,8 @@ The Showroom pod supports three terminal modes, configured via `terminal.type`:
 | Type | Container | Description |
 |------|-----------|-------------|
 | `ocp` | ttyd (`quay.io/rhpds/openshift-showroom-terminal-ocp`) | In-pod shell with `oc` pre-authenticated via ServiceAccount. No bastion needed. Accessible at `/terminal/`. |
-| `bastion` | Wetty (`quay.io/rhpds/wetty:v2.5`) | SSH terminal to a bastion host via Wetty. Accessible at `/wetty`. Requires bastion host, user, and password. |
-| `tmux` | Wetty (`quay.io/rhpds/wetty:v2.5`) | Same as `bastion` but the bastion is expected to have tmux configured (e.g. via `.bashrc`). Accessible at `/wetty`. |
+| `wetty` | Wetty (`quay.io/rhpds/wetty:v2.5`) | SSH terminal to a bastion host via Wetty. Accessible at `/wetty`. Requires bastion host, user, and password. |
+| `tmux` | Wetty (`quay.io/rhpds/wetty:v2.5`) | SSH + tmux session on bastion via Wetty. Accessible at `/wetty`. Requires bastion host, user, and password. Bastion must have tmux configured. |
 
 When `terminal.enabled` is `false`, no terminal container or PVC is created.
 
@@ -273,7 +273,7 @@ ocp4_workload_gitops_bootstrap_helm_values:
 
 If you omit `tabs` (or set `tabs: []`), the content repo's own `ui-config.yml` is used instead.
 
-### Terminal: Bastion SSH via Wetty
+### Terminal: SSH via Wetty
 
 ```yaml
 ocp4_workload_gitops_bootstrap_helm_values:
@@ -286,7 +286,7 @@ ocp4_workload_gitops_bootstrap_helm_values:
             repoRef: "main"
           terminal:
             enabled: true
-            type: "bastion"
+            type: "wetty"
             bastion:
               host: "{{ bastion_ansible_host }}"
               user: "{{ bastion_ansible_user }}"
