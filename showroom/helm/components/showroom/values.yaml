@@ -41,6 +41,10 @@ showroom:
         cpu: "500m"
         memory: "1Gi"
 
+  # Default panel mode on first visit: "instructions", "split", or "console"
+  # Once the user toggles, their preference is saved in the browser.
+  panelMode: "instructions"
+
   # UI tabs (iframe panels in the right pane)
   # If set, overrides the content repo's ui-config.yml
   # Uses ${DOMAIN} for dynamic cluster domain substitution

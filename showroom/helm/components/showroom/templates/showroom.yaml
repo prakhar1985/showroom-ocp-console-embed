@@ -54,6 +54,7 @@ data:
        * Keyboard: Ctrl+1 = full instructions, Ctrl+2 = split, Ctrl+3 = full console
        */
       var STORE_KEY = 'sr-panel-mode';
+      var DEFAULT_MODE = '{{ .Values.showroom.panelMode | default "instructions" }}';
       var MAX_RETRIES = 30;
       var retries = 0;
 
@@ -229,11 +230,15 @@ data:
           }
         }).observe(left, { attributes: true, attributeFilter: ['style'] });
 
-        /* Restore saved mode */
+        /* Restore saved mode, or use configured default on first visit */
         try {
           var saved = localStorage.getItem(STORE_KEY);
-          if (saved === 'console' || saved === 'instructions') mode = saved;
-        } catch (e) {}
+          if (saved === 'console' || saved === 'instructions' || saved === 'split') {
+            mode = saved;
+          } else {
+            mode = DEFAULT_MODE;
+          }
+        } catch (e) { mode = DEFAULT_MODE; }
         apply();
       }
 
