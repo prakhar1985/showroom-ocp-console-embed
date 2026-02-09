@@ -189,6 +189,156 @@ components:
 
 `${DOMAIN}` is replaced at runtime.
 
+## Terminal Configuration
+
+The Showroom pod supports three terminal modes, configured via `terminal.type`:
+
+| Type | Container | Description |
+|------|-----------|-------------|
+| `ocp` | ttyd (`quay.io/rhpds/openshift-showroom-terminal-ocp`) | In-pod shell with `oc` pre-authenticated via ServiceAccount. No bastion needed. Accessible at `/terminal/`. |
+| `bastion` | Wetty (`quay.io/rhpds/wetty:v2.5`) | SSH terminal to a bastion host via Wetty. Accessible at `/wetty`. Requires bastion host, user, and password. |
+| `tmux` | Wetty (`quay.io/rhpds/wetty:v2.5`) | Same as `bastion` but the bastion is expected to have tmux configured (e.g. via `.bashrc`). Accessible at `/wetty`. |
+
+When `terminal.enabled` is `false`, no terminal container or PVC is created.
+
+## Using with AgnosticV
+
+This repo is designed to be deployed via the `ocp4_workload_gitops_bootstrap` workload. Below are examples of how to configure different features in your AgnosticV catalog's `common.yaml`.
+
+### Minimal Example (Console Embed Only)
+
+```yaml
+ocp4_workload_gitops_bootstrap_repo_url: https://github.com/prakhar1985/showroom-ocp-console-embed.git
+ocp4_workload_gitops_bootstrap_repo_revision: main
+ocp4_workload_gitops_bootstrap_repo_path: showroom/helm
+
+ocp4_workload_gitops_bootstrap_helm_values:
+  components:
+    showroom:
+      values:
+        showroom:
+          content:
+            repoUrl: "https://github.com/your-org/your-showroom-content.git"
+            repoRef: "main"
+```
+
+This deploys Showroom with OCP Console embed. Tabs come from the content repo's `ui-config.yml`.
+
+### Custom Tabs (Override Content Repo)
+
+```yaml
+ocp4_workload_gitops_bootstrap_helm_values:
+  components:
+    showroom:
+      values:
+        showroom:
+          content:
+            repoUrl: "https://github.com/your-org/your-showroom-content.git"
+            repoRef: "main"
+          # Tabs here OVERRIDE the content repo's ui-config.yml.
+          # ${DOMAIN} is replaced at runtime with the cluster domain.
+          tabs:
+          - name: OCP Console
+            url: "https://console-openshift-console.${DOMAIN}"
+          - name: ArgoCD
+            url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
+          - name: AAP
+            url: "https://aap-aap.${DOMAIN}"
+```
+
+If you omit `tabs` (or set `tabs: []`), the content repo's own `ui-config.yml` is used instead.
+
+### Terminal: Bastion SSH via Wetty
+
+```yaml
+ocp4_workload_gitops_bootstrap_helm_values:
+  components:
+    showroom:
+      values:
+        showroom:
+          content:
+            repoUrl: "https://github.com/your-org/your-showroom-content.git"
+            repoRef: "main"
+          terminal:
+            enabled: true
+            type: "bastion"
+            bastion:
+              host: "{{ bastion_ansible_host }}"
+              user: "{{ bastion_ansible_user }}"
+              password: "{{ bastion_ansible_ssh_pass }}"
+              port: "{{ bastion_ansible_port | default('22') }}"
+```
+
+Bastion credentials are typically propagated from the OCP cluster component via `propagate_provision_data`.
+
+### Terminal: In-Pod OCP Shell
+
+```yaml
+ocp4_workload_gitops_bootstrap_helm_values:
+  components:
+    showroom:
+      values:
+        showroom:
+          content:
+            repoUrl: "https://github.com/your-org/your-showroom-content.git"
+            repoRef: "main"
+          terminal:
+            enabled: true
+            type: "ocp"
+```
+
+No bastion config needed -- the terminal runs inside the pod with `oc` pre-authenticated via the ServiceAccount.
+
+### Multi-User with All Features
+
+```yaml
+ocp4_workload_gitops_bootstrap_helm_values:
+  numUsers: "{{ num_users | int }}"
+  userPassword: "{{ common_password }}"
+  components:
+    showroom:
+      values:
+        showroom:
+          content:
+            repoUrl: "{{ showroom_content_repo }}"
+            repoRef: "{{ showroom_content_ref }}"
+          tabs:
+          - name: OCP Console
+            url: "https://console-openshift-console.${DOMAIN}"
+          - name: ArgoCD
+            url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
+          - name: AAP
+            url: "https://aap-aap.${DOMAIN}"
+          - name: DevSpaces
+            url: "https://devspaces.${DOMAIN}"
+          - name: OpenShift AI
+            url: "https://data-science-gateway.${DOMAIN}"
+          terminal:
+            enabled: "{{ terminal_type | default('none') != 'none' }}"
+            type: "{{ terminal_type | default('none') }}"
+            bastion:
+              host: "{{ bastion_ansible_host | default('') }}"
+              user: "{{ bastion_ansible_user | default('') }}"
+              password: "{{ bastion_ansible_ssh_pass | default('') }}"
+              port: "{{ bastion_ansible_port | default('22') }}"
+          userdata: >-
+            {{ lookup('agnosticd_user_data', '*')
+               | dict2items
+               | rejectattr('key', 'eq', 'users')
+               | items2dict }}
+```
+
+### Common Route URLs
+
+| Service | Route URL |
+|---------|-----------|
+| OCP Console | `https://console-openshift-console.${DOMAIN}` |
+| ArgoCD | `https://openshift-gitops-server-openshift-gitops.${DOMAIN}` |
+| AAP | `https://aap-aap.${DOMAIN}` |
+| DevSpaces | `https://devspaces.${DOMAIN}` |
+| OpenShift AI 3 | `https://data-science-gateway.${DOMAIN}` |
+| Grafana (ACM) | `https://grafana-open-cluster-management-observability.${DOMAIN}` |
+
 ## Deployment
 
 Order from RHDP with:
