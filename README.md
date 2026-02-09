@@ -201,6 +201,31 @@ The Showroom pod supports three terminal modes, configured via `terminal.type`:
 
 When `terminal.enabled` is `false`, no terminal container or PVC is created.
 
+## Panel Toggle (Focus Mode)
+
+On small screens the split pane can feel cramped. A panel toggle is injected automatically via nginx `sub_filter` -- no changes needed in the content repo.
+
+Two buttons appear on the divider between the instructions and console panes:
+
+| Button | Action |
+|--------|--------|
+| `◀` (top) | Collapse instructions -- console gets full width |
+| `▶` (bottom) | Collapse console -- instructions get full width |
+
+When a pane is hidden, a restore button appears at the edge (document icon to restore instructions, monitor icon to restore console).
+
+**Keyboard shortcuts:**
+
+| Shortcut | Mode |
+|----------|------|
+| `Ctrl+1` | Full-width instructions |
+| `Ctrl+2` | Split view (both panes) |
+| `Ctrl+3` | Full-width console |
+
+Double-clicking the gutter also toggles to full console. State persists across page reloads via browser `localStorage` (no server-side storage).
+
+**Lab workflow:** Read the step (`Ctrl+1`) -- do the task (`Ctrl+3`) -- read next step (`Ctrl+1`) -- repeat.
+
 ## Using with AgnosticV
 
 This repo is designed to be deployed via the `ocp4_workload_gitops_bootstrap` workload. Below are examples of how to configure different features in your AgnosticV catalog's `common.yaml`.
