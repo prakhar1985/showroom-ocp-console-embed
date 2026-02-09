@@ -20,9 +20,8 @@ demo:
   appName: ""
 
 # Multi-user support
-# 0 = single admin user (creates showroom-admin)
 # N = N users (creates showroom-user1 through showroom-userN)
-numUsers: 0
+numUsers: 1
 
 # User password for multi-user mode (injected by AgV catalog)
 userPassword: ""
@@ -43,6 +42,12 @@ components:
             url: "https://console-openshift-console.${DOMAIN}"
           - name: ArgoCD
             url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
+          - name: AAP
+            url: "https://aap-aap.${DOMAIN}"
+          - name: DevSpaces
+            url: "https://devspaces.${DOMAIN}"
+          - name: OpenShift AI
+            url: "https://rhods-dashboard-redhat-ods-applications.${DOMAIN}"
 
   ocpConsoleEmbed:
     enabled: true
