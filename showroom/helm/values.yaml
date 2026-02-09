@@ -47,7 +47,7 @@ components:
           - name: DevSpaces
             url: "https://devspaces.${DOMAIN}"
           - name: OpenShift AI
-            url: "https://rhods-dashboard-redhat-ods-applications.${DOMAIN}"
+            url: "https://data-science-gateway.${DOMAIN}"
 
   ocpConsoleEmbed:
     enabled: true
