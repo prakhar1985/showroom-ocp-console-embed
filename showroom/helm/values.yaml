@@ -48,6 +48,10 @@ components:
             url: "https://devspaces.${DOMAIN}"
           - name: OpenShift AI
             url: "https://data-science-gateway.${DOMAIN}"
+        # Terminal: disabled by default. Set via AgV catalog parameter.
+        # type: ocp (in-pod shell), bastion (SSH to bastion), tmux (SSH + tmux)
+        terminal:
+          enabled: false
 
   ocpConsoleEmbed:
     enabled: true

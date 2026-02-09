@@ -20,6 +20,13 @@ showroom:
   terminal:
     enabled: true
     image: "quay.io/rhpds/openshift-showroom-terminal-ocp:latest"
+    # type: ocp (in-pod OCP shell), bastion (SSH to bastion), tmux (SSH + tmux)
+    type: "ocp"
+    bastion:
+      host: ""
+      user: ""
+      password: ""
+      port: "22"
     resources:
       requests:
         cpu: "500m"
