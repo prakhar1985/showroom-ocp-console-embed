@@ -168,6 +168,13 @@ Each user gets their own namespace, pod, route, and storage. The webhook and Job
 
 ## Configurable Tabs
 
+Tabs can be defined in **either** of two places:
+
+1. **Helm values** (this repo's `values.yaml` or AgnosticV `ocp4_workload_gitops_bootstrap_helm_values`) -- takes precedence
+2. **Content repo** (`ui-config.yml` in the Showroom content repository) -- used when no tabs are defined in Helm values
+
+Most Showroom content repos define tabs in their own `ui-config.yml`. When you define tabs in the Helm values here, they **override** the content repo's `ui-config.yml` via a ConfigMap mount. If you leave `tabs: []` empty, the content repo's own tab config is used instead.
+
 ```yaml
 components:
   showroom:
@@ -180,7 +187,7 @@ components:
             url: "https://openshift-gitops-server-openshift-gitops.${DOMAIN}"
 ```
 
-`${DOMAIN}` is replaced at runtime. Empty `tabs: []` uses the content repo's own config.
+`${DOMAIN}` is replaced at runtime.
 
 ## Deployment
 
