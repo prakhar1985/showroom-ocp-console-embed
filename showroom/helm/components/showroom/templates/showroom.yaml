@@ -30,6 +30,134 @@ subjects:
   name: {{ .Values.showroom.name }}
   namespace: {{ .Values.showroom.namespace }}
 ---
+# Showroom Panel Toggle Script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.showroom.name }}-toggle-script
+  namespace: {{ .Values.showroom.namespace }}
+data:
+  showroom-toggle.js: |
+    (function () {
+      'use strict';
+      var STORE_KEY = 'sr-panel-collapsed';
+      var MAX_RETRIES = 30;
+      var retries = 0;
+
+      function init() {
+        /* Find the Split.js gutter (horizontal divider between panes) */
+        var gutter = document.querySelector('.gutter.gutter-horizontal')
+                  || document.querySelector('.gutter')
+                  || document.querySelector('[class*="Resizer"]');
+        if (!gutter) {
+          if (++retries < MAX_RETRIES) { setTimeout(init, 400); }
+          return;
+        }
+
+        var left  = gutter.previousElementSibling;
+        var right = gutter.nextElementSibling;
+        if (!left || !right) return;
+
+        /* Remember original sizes so we can restore */
+        var origLeft  = left.style.width  || left.style.flexBasis || '';
+        var origRight = right.style.width || right.style.flexBasis || '';
+
+        /* ── inject styles ─────────────────────────────────── */
+        var css = document.createElement('style');
+        css.textContent = [
+          '.sr-toggle{',
+          '  position:fixed;top:50%;z-index:99999;transform:translateY(-50%);',
+          '  width:22px;height:48px;border:1px solid #bbb;border-left:0;',
+          '  border-radius:0 6px 6px 0;background:#fff;cursor:pointer;',
+          '  font-size:11px;padding:0;color:#555;',
+          '  box-shadow:2px 0 6px rgba(0,0,0,.12);',
+          '  display:flex;align-items:center;justify-content:center;',
+          '  transition:background .15s,left .25s;',
+          '}',
+          '.sr-toggle:hover{background:#eee}',
+          '.sr-toggle svg{width:14px;height:14px;fill:currentColor}',
+          '.sr-collapsed .gutter{display:none!important}',
+        ].join('\n');
+        document.head.appendChild(css);
+
+        /* ── icons ─────────────────────────────────────────── */
+        var chevronLeft  = '<svg viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>';
+        var chevronRight = '<svg viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>';
+
+        /* ── create button ─────────────────────────────────── */
+        var btn = document.createElement('button');
+        btn.className = 'sr-toggle';
+        btn.title     = 'Toggle instructions  (Ctrl+B)';
+        document.body.appendChild(btn);
+
+        var collapsed = false;
+
+        function position() {
+          if (collapsed) {
+            btn.style.left = '0px';
+            btn.innerHTML  = chevronRight;
+          } else {
+            var r = left.getBoundingClientRect();
+            btn.style.left = Math.max(0, r.right - 11) + 'px';
+            btn.innerHTML  = chevronLeft;
+          }
+        }
+
+        function collapse() {
+          collapsed = true;
+          left.style.display  = 'none';
+          gutter.style.display = 'none';
+          right.style.width    = '100%';
+          if (right.style.flexBasis !== undefined) right.style.flexBasis = '100%';
+          position();
+          try { localStorage.setItem(STORE_KEY, '1'); } catch (e) {}
+        }
+
+        function expand() {
+          collapsed = false;
+          left.style.display   = '';
+          gutter.style.display = '';
+          right.style.width    = origRight || '';
+          if (right.style.flexBasis !== undefined) right.style.flexBasis = origRight || '';
+          /* Let Split.js recalculate if present */
+          window.dispatchEvent(new Event('resize'));
+          position();
+          try { localStorage.setItem(STORE_KEY, '0'); } catch (e) {}
+        }
+
+        function toggle() { collapsed ? expand() : collapse(); }
+
+        btn.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation(); toggle();
+        });
+
+        /* Double-click gutter to toggle */
+        gutter.addEventListener('dblclick', function (e) {
+          e.preventDefault(); toggle();
+        });
+
+        /* Keyboard shortcut: Ctrl+B */
+        document.addEventListener('keydown', function (e) {
+          if (e.ctrlKey && e.key === 'b') { e.preventDefault(); toggle(); }
+        });
+
+        /* Keep button positioned on resize / drag */
+        window.addEventListener('resize', position);
+        new MutationObserver(position).observe(
+          left, { attributes: true, attributeFilter: ['style'] }
+        );
+
+        /* Restore saved state */
+        try {
+          if (localStorage.getItem(STORE_KEY) === '1') collapse();
+          else position();
+        } catch (e) { position(); }
+      }
+
+      if (document.readyState === 'complete') setTimeout(init, 600);
+      else window.addEventListener('load', function () { setTimeout(init, 600); });
+    })();
+---
 # Showroom Nginx ConfigMap
 kind: ConfigMap
 metadata:
@@ -53,14 +181,25 @@ data:
       server {
         listen 8080;
         absolute_redirect off;
+        # Serve toggle script from ConfigMap
+        location = /showroom-toggle.js {
+          alias /etc/nginx/toggle/showroom-toggle.js;
+          default_type application/javascript;
+        }
         location / {
           proxy_pass http://127.0.0.1:8000;
           expires off;
           proxy_cache off;
           proxy_pass_request_headers on;
-          proxy_set_header Accept-Encoding "gzip";
+          # Empty Accept-Encoding so upstream sends uncompressed HTML
+          # (required for sub_filter to work)
+          proxy_set_header Accept-Encoding "";
           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
           proxy_set_header X-Forwarded-Proto $scheme;
+          # Inject toggle script into HTML pages
+          sub_filter '</head>' '<script src="/showroom-toggle.js" defer></script></head>';
+          sub_filter_once on;
+          sub_filter_types text/html;
         }
         {{- if and .Values.showroom.terminal.enabled (eq .Values.showroom.terminal.type "ocp") }}
         location /terminal/ {
@@ -218,6 +357,8 @@ spec:
         - mountPath: /etc/nginx/nginx.conf
           name: nginx-config
           subPath: nginx.conf
+        - mountPath: /etc/nginx/toggle
+          name: toggle-script
         - mountPath: /var/cache/nginx
           name: nginx-cache
         - mountPath: /var/run
@@ -337,6 +478,9 @@ spec:
         emptyDir: {}
       - name: nginx-cache
         emptyDir: {}
+      - name: toggle-script
+        configMap:
+          name: {{ .Values.showroom.name }}-toggle-script
       {{- if .Values.showroom.terminal.enabled }}
       - name: terminal-lab-user-home
         persistentVolumeClaim:
