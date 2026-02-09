@@ -40,12 +40,24 @@ data:
   showroom-toggle.js: |
     (function () {
       'use strict';
-      var STORE_KEY = 'sr-panel-collapsed';
+      /*
+       * Three-state panel toggle for Showroom:
+       *   "split"  – both panes visible (default)
+       *   "console" – instructions hidden, console full-width
+       *   "instructions" – console hidden, instructions full-width
+       *
+       * Two buttons sit on the divider:
+       *   Left chevron  (◀) – hide instructions → full console
+       *   Right chevron (▶) – hide console → full instructions
+       * When a pane is hidden, a restore button appears at that edge.
+       *
+       * Keyboard: Ctrl+1 = full instructions, Ctrl+2 = split, Ctrl+3 = full console
+       */
+      var STORE_KEY = 'sr-panel-mode';
       var MAX_RETRIES = 30;
       var retries = 0;
 
       function init() {
-        /* Find the Split.js gutter (horizontal divider between panes) */
         var gutter = document.querySelector('.gutter.gutter-horizontal')
                   || document.querySelector('.gutter')
                   || document.querySelector('[class*="Resizer"]');
@@ -58,100 +70,171 @@ data:
         var right = gutter.nextElementSibling;
         if (!left || !right) return;
 
-        /* Remember original sizes so we can restore */
         var origLeft  = left.style.width  || left.style.flexBasis || '';
         var origRight = right.style.width || right.style.flexBasis || '';
 
-        /* ── inject styles ─────────────────────────────────── */
+        /* ── styles ───────────────────────────────────────── */
         var css = document.createElement('style');
         css.textContent = [
-          '.sr-toggle{',
-          '  position:fixed;top:50%;z-index:99999;transform:translateY(-50%);',
-          '  width:22px;height:48px;border:1px solid #bbb;border-left:0;',
-          '  border-radius:0 6px 6px 0;background:#fff;cursor:pointer;',
+          '.sr-btn{',
+          '  position:fixed;z-index:99999;',
+          '  width:24px;height:40px;border:1px solid #bbb;',
+          '  background:#fff;cursor:pointer;',
           '  font-size:11px;padding:0;color:#555;',
           '  box-shadow:2px 0 6px rgba(0,0,0,.12);',
           '  display:flex;align-items:center;justify-content:center;',
-          '  transition:background .15s,left .25s;',
+          '  transition:background .15s;',
           '}',
-          '.sr-toggle:hover{background:#eee}',
-          '.sr-toggle svg{width:14px;height:14px;fill:currentColor}',
-          '.sr-collapsed .gutter{display:none!important}',
+          '.sr-btn:hover{background:#e8e8e8}',
+          '.sr-btn svg{width:14px;height:14px;fill:currentColor}',
+          /* Top button: hide instructions / show instructions */
+          '.sr-btn-left{',
+          '  top:calc(50% - 24px);border-left:0;',
+          '  border-radius:0 5px 0 0;',
+          '}',
+          /* Bottom button: hide console / show console */
+          '.sr-btn-right{',
+          '  top:50%;border-left:0;border-top:0;',
+          '  border-radius:0 0 5px 0;',
+          '}',
+          /* Label shown when a pane is hidden */
+          '.sr-label{',
+          '  position:fixed;z-index:99998;',
+          '  background:#333;color:#fff;font-size:11px;',
+          '  padding:4px 10px;border-radius:3px;',
+          '  pointer-events:none;white-space:nowrap;',
+          '  opacity:0;transition:opacity .2s;',
+          '}',
+          '.sr-btn:hover+.sr-label{opacity:1}',
         ].join('\n');
         document.head.appendChild(css);
 
-        /* ── icons ─────────────────────────────────────────── */
-        var chevronLeft  = '<svg viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>';
-        var chevronRight = '<svg viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>';
+        /* ── SVG icons ────────────────────────────────────── */
+        var icoLeft  = '<svg viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>';
+        var icoRight = '<svg viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>';
+        /* doc icon for "show instructions" */
+        var icoDoc   = '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z"/></svg>';
+        /* monitor icon for "show console" */
+        var icoMon   = '<svg viewBox="0 0 24 24"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>';
 
-        /* ── create button ─────────────────────────────────── */
-        var btn = document.createElement('button');
-        btn.className = 'sr-toggle';
-        btn.title     = 'Toggle instructions  (Ctrl+B)';
-        document.body.appendChild(btn);
+        /* ── create buttons ───────────────────────────────── */
+        var btnL = document.createElement('button');
+        btnL.className = 'sr-btn sr-btn-left';
+        document.body.appendChild(btnL);
 
-        var collapsed = false;
+        var btnR = document.createElement('button');
+        btnR.className = 'sr-btn sr-btn-right';
+        document.body.appendChild(btnR);
 
-        function position() {
-          if (collapsed) {
-            btn.style.left = '0px';
-            btn.innerHTML  = chevronRight;
-          } else {
+        var mode = 'split'; /* split | console | instructions */
+
+        function hidePane(el) {
+          el.style.display = 'none';
+          el.style.width = '0';
+          if (el.style.flexBasis !== undefined) el.style.flexBasis = '0';
+        }
+        function fullPane(el) {
+          el.style.display = '';
+          el.style.width = '100%';
+          if (el.style.flexBasis !== undefined) el.style.flexBasis = '100%';
+        }
+        function restorePane(el, orig) {
+          el.style.display = '';
+          el.style.width = orig || '';
+          if (el.style.flexBasis !== undefined) el.style.flexBasis = orig || '';
+        }
+
+        function apply() {
+          if (mode === 'split') {
+            restorePane(left, origLeft);
+            restorePane(right, origRight);
+            gutter.style.display = '';
+            window.dispatchEvent(new Event('resize'));
+            /* Position both buttons on the gutter */
             var r = left.getBoundingClientRect();
-            btn.style.left = Math.max(0, r.right - 11) + 'px';
-            btn.innerHTML  = chevronLeft;
+            var x = Math.max(0, r.right - 12);
+            btnL.style.left = x + 'px';
+            btnL.innerHTML = icoLeft;
+            btnL.title = 'Full-width console  (Ctrl+3)';
+            btnR.style.left = x + 'px';
+            btnR.innerHTML = icoRight;
+            btnR.title = 'Full-width instructions  (Ctrl+1)';
+            btnR.style.display = '';
+          } else if (mode === 'console') {
+            hidePane(left);
+            fullPane(right);
+            gutter.style.display = 'none';
+            /* Show restore button at left edge */
+            btnL.style.left = '0px';
+            btnL.innerHTML = icoDoc;
+            btnL.title = 'Show instructions  (Ctrl+1)';
+            /* Hide second button */
+            btnR.style.display = 'none';
+          } else if (mode === 'instructions') {
+            hidePane(right);
+            fullPane(left);
+            gutter.style.display = 'none';
+            /* Show restore button at right edge — use btnL repositioned */
+            btnL.style.left = 'calc(100% - 26px)';
+            btnL.innerHTML = icoMon;
+            btnL.title = 'Show console  (Ctrl+3)';
+            btnR.style.display = 'none';
           }
+          try { localStorage.setItem(STORE_KEY, mode); } catch (e) {}
         }
 
-        function collapse() {
-          collapsed = true;
-          left.style.display  = 'none';
-          gutter.style.display = 'none';
-          right.style.width    = '100%';
-          if (right.style.flexBasis !== undefined) right.style.flexBasis = '100%';
-          position();
-          try { localStorage.setItem(STORE_KEY, '1'); } catch (e) {}
-        }
+        function setMode(m) { mode = m; apply(); }
 
-        function expand() {
-          collapsed = false;
-          left.style.display   = '';
-          gutter.style.display = '';
-          right.style.width    = origRight || '';
-          if (right.style.flexBasis !== undefined) right.style.flexBasis = origRight || '';
-          /* Let Split.js recalculate if present */
-          window.dispatchEvent(new Event('resize'));
-          position();
-          try { localStorage.setItem(STORE_KEY, '0'); } catch (e) {}
-        }
-
-        function toggle() { collapsed ? expand() : collapse(); }
-
-        btn.addEventListener('click', function (e) {
-          e.preventDefault(); e.stopPropagation(); toggle();
+        btnL.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          if (mode === 'split') setMode('console');
+          else if (mode === 'console') setMode('split');
+          else if (mode === 'instructions') setMode('split');
         });
 
-        /* Double-click gutter to toggle */
+        btnR.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          if (mode === 'split') setMode('instructions');
+          else setMode('split');
+        });
+
+        /* Double-click gutter → full console */
         gutter.addEventListener('dblclick', function (e) {
-          e.preventDefault(); toggle();
+          e.preventDefault(); setMode('console');
         });
 
-        /* Keyboard shortcut: Ctrl+B */
+        /* Keyboard: Ctrl+1 = instructions, Ctrl+2 = split, Ctrl+3 = console */
         document.addEventListener('keydown', function (e) {
-          if (e.ctrlKey && e.key === 'b') { e.preventDefault(); toggle(); }
+          if (!e.ctrlKey) return;
+          if (e.key === '1') { e.preventDefault(); setMode('instructions'); }
+          if (e.key === '2') { e.preventDefault(); setMode('split'); }
+          if (e.key === '3') { e.preventDefault(); setMode('console'); }
         });
 
-        /* Keep button positioned on resize / drag */
-        window.addEventListener('resize', position);
-        new MutationObserver(position).observe(
-          left, { attributes: true, attributeFilter: ['style'] }
-        );
+        /* Reposition on resize / drag */
+        window.addEventListener('resize', function () {
+          if (mode === 'split') {
+            var r = left.getBoundingClientRect();
+            var x = Math.max(0, r.right - 12);
+            btnL.style.left = x + 'px';
+            btnR.style.left = x + 'px';
+          }
+        });
+        new MutationObserver(function () {
+          if (mode === 'split') {
+            var r = left.getBoundingClientRect();
+            var x = Math.max(0, r.right - 12);
+            btnL.style.left = x + 'px';
+            btnR.style.left = x + 'px';
+          }
+        }).observe(left, { attributes: true, attributeFilter: ['style'] });
 
-        /* Restore saved state */
+        /* Restore saved mode */
         try {
-          if (localStorage.getItem(STORE_KEY) === '1') collapse();
-          else position();
-        } catch (e) { position(); }
+          var saved = localStorage.getItem(STORE_KEY);
+          if (saved === 'console' || saved === 'instructions') mode = saved;
+        } catch (e) {}
+        apply();
       }
 
       if (document.readyState === 'complete') setTimeout(init, 600);
