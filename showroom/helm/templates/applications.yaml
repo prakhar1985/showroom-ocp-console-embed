@@ -1,4 +1,4 @@
-{{- $guid := .Values.deployer.guid }}
+{{- $guid := .Values.guid | default .Values.deployer.guid }}
 {{- if .Values.components.showroom.enabled }}
 {{- if gt (int .Values.numUsers) 0 }}
 {{- /* Multi-user: create showroom-{guid}-user1 through showroom-{guid}-userN */}}

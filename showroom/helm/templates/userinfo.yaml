@@ -1,5 +1,5 @@
 {{- if .Values.components.showroom.enabled }}
-{{- $guid := .Values.deployer.guid }}
+{{- $guid := .Values.guid | default .Values.deployer.guid }}
 ---
 # UserInfo ConfigMap for RHDP/Babylon integration
 # The ocp4_workload_gitops_bootstrap role discovers ConfigMaps with the
