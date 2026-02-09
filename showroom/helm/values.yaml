@@ -9,11 +9,7 @@ argocd:
 repoUrl: https://github.com/prakhar1985/showroom-ocp-console-embed.git
 revision: main
 
-# GUID -- passed at top level because ocp4_workload_gitops_bootstrap's
-# combine() overwrites deployer.guid with auto-injected deployer values.
-guid: ""
-
-# Deployer values -- domain and apiUrl are auto-injected by the workload
+# Deployer values -- domain, apiUrl, and guid are auto-injected by the workload
 deployer:
   domain: ""
   guid: ""
