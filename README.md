@@ -201,28 +201,37 @@ The Showroom pod supports three terminal modes, configured via `terminal.type`:
 
 When `terminal.enabled` is `false`, no terminal container or PVC is created.
 
-## Panel Toggle (Focus Mode)
+## View Switcher (Panel Toggle)
 
-On small screens the split pane can feel cramped. A panel toggle is injected automatically via nginx `sub_filter` -- no changes needed in the content repo.
+The default Showroom split layout can feel cramped when reading dense instructions or when the console needs full width. A toolbar is injected automatically via nginx `sub_filter` -- no changes needed in the content repo.
 
-Two buttons appear on the divider between the instructions and console panes:
+A dark toolbar appears in the **top-right corner** with three buttons:
 
-| Button | Action |
-|--------|--------|
-| `◀` (top) | Collapse instructions -- console gets full width |
-| `▶` (bottom) | Collapse console -- instructions get full width |
+| Button | Mode | What it does |
+|--------|------|-------------|
+| **Instructions** | `instructions` | Lab guide gets full width, tabs/console hidden |
+| **Split** | `split` | Both panes side by side (default Split.js layout) |
+| **Tabs** | `tabs` | Tabs/console gets full width, instructions hidden |
 
-When a pane is hidden, a restore button appears at the edge (document icon to restore instructions, monitor icon to restore console).
+The active mode is highlighted in red.
 
 **Keyboard shortcuts:**
 
 | Shortcut | Mode |
 |----------|------|
-| `Ctrl+1` | Full-width instructions |
-| `Ctrl+2` | Split view (both panes) |
-| `Ctrl+3` | Full-width console |
+| `Ctrl+1` | Instructions (full-width) |
+| `Ctrl+2` | Split (side by side) |
+| `Ctrl+3` | Tabs (full-width) |
 
-Double-clicking the gutter also toggles to full console. State persists across page reloads via browser `localStorage` (no server-side storage).
+Keyboard shortcuts only work when the parent page has focus. After clicking inside a cross-origin iframe (e.g. the OCP Console), the parent page loses focus. Hover over the toolbar to refocus the parent page.
+
+**State persistence:**
+
+- View mode is stored in the **URL hash** (`#view=instructions`) so you can share or bookmark a specific view
+- Also saved to **localStorage** (`sr-panel-mode`) so the mode persists across page reloads
+- Priority on load: URL hash > localStorage > default mode (configurable via `showroom.panelMode` in values.yaml)
+
+**First-visit hint:** On first visit, a tooltip appears below the toolbar explaining the controls. It auto-dismisses after 8 seconds and won't show again (tracked via `sr-hint-dismissed` in localStorage).
 
 **Lab workflow:** Read the step (`Ctrl+1`) -- do the task (`Ctrl+3`) -- read next step (`Ctrl+1`) -- repeat.
 
@@ -394,3 +403,235 @@ oc get pods -n ocp-console-embed-GUID -l app=ocp-console-embed-GUID-webhook
 # OAuth route is reencrypt
 oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.tls.termination}'
 ```
+
+---
+
+## Developer Guide
+
+### Repository Layout
+
+```
+showroom/helm/
+├── Chart.yaml                          # App of Apps chart
+├── values.yaml                         # Top-level values (numUsers, deployer, component toggles)
+├── templates/
+│   ├── applications.yaml               # ArgoCD Application resources (one per user + webhook)
+│   └── userinfo.yaml                   # ConfigMap for RHDP portal (lab_ui_url, users_json)
+└── components/
+    ├── showroom/                        # Showroom lab guide + toggle script
+    │   ├── Chart.yaml
+    │   ├── values.yaml                  # Showroom defaults (content, tabs, terminal, panelMode)
+    │   └── templates/
+    │       └── showroom.yaml            # All Showroom resources (ConfigMaps, Deployment, Route, etc.)
+    └── ocp-console-embed/               # Webhook + Job for iframe embedding
+        ├── Chart.yaml
+        ├── values.yaml                  # Webhook defaults (namespace, image)
+        └── templates/
+            ├── webhook-script.yaml      # Python webhook code (passthrough → reencrypt)
+            ├── webhook-deployment.yaml  # Webhook pod
+            ├── webhook-service.yaml     # Service with serving-cert annotation
+            ├── webhook-config.yaml      # MutatingWebhookConfiguration
+            ├── webhook-cabundle.yaml    # ConfigMap for service CA cert
+            ├── job.yaml                 # PostSync Job (patches IngressController, verifies)
+            ├── serviceaccount.yaml      # ServiceAccount for Job + webhook
+            ├── clusterrole.yaml         # RBAC permissions
+            └── clusterrolebinding.yaml  # ClusterRoleBinding
+```
+
+### How Values Flow
+
+```
+AgnosticV common.yaml
+  └─ ocp4_workload_gitops_bootstrap_helm_values
+       └─ showroom/helm/values.yaml          (top-level: numUsers, deployer, components)
+            ├─ templates/applications.yaml    (reads components, creates ArgoCD apps)
+            └─ components/showroom/values.yaml (per-app: content, tabs, terminal, panelMode)
+```
+
+The `ocp4_workload_gitops_bootstrap` role injects `deployer.domain`, `deployer.guid`, `demo.namespace`, and `demo.appName` automatically. You don't need to set these in your catalog.
+
+### Modifying the View Switcher (Toggle Script)
+
+The toggle script lives in:
+
+```
+components/showroom/templates/showroom.yaml → ConfigMap "showroom-toggle-script"
+```
+
+It's a self-contained JavaScript IIFE injected into every Showroom HTML page via nginx `sub_filter`. The script:
+
+1. Waits for Split.js to render the gutter element
+2. Tags panes with CSS marker classes (`sr-left`, `sr-right`, `sr-gutter`)
+3. Builds the toolbar and appends it to `<body>`
+4. Switches modes by adding/removing CSS classes on `<body>`
+
+#### Key design decision: CSS classes, not inline styles
+
+Split.js manages pane widths via inline `style` attributes. **Never modify these directly** -- it breaks Split.js's internal state and causes bugs when switching back to split mode.
+
+Instead, the toggle uses CSS class overrides on `<body>`:
+
+```
+Instructions mode:  body.sr-mode-instructions
+  → hides .sr-right and .sr-gutter (display:none!important)
+  → expands .sr-left to 100% (width:100%!important)
+
+Tabs mode:          body.sr-mode-tabs
+  → hides .sr-left and .sr-gutter (display:none!important)
+  → expands .sr-right to 100% (width:100%!important)
+
+Split mode:         (no body class)
+  → CSS overrides removed, Split.js inline styles take effect naturally
+```
+
+#### Common changes
+
+**Change button labels or icons:**
+
+In the toggle script, find the `btnI`, `btnS`, `btnC` variables. Each has an `innerHTML` with an SVG icon and a `<span>` label. Change the `<span>` text.
+
+```javascript
+// Example: rename "Tabs" to "Console"
+btnC.innerHTML = icoTabs + '<span>Console</span>';
+```
+
+**Change default mode:**
+
+In `components/showroom/values.yaml`, change `panelMode`:
+
+```yaml
+showroom:
+  panelMode: "split"    # "instructions", "split", or "tabs"
+```
+
+**Change toolbar position:**
+
+In the CSS array, find `.sr-toolbar{` and change `top` and `right`:
+
+```css
+.sr-toolbar{
+  position:fixed;top:8px;right:12px;   /* ← change these */
+```
+
+**Change active button color:**
+
+Find `.sr-mode-btn.sr-active{` and change the `background` and `box-shadow`:
+
+```css
+.sr-mode-btn.sr-active{
+  color:#fff;background:#ee0000;          /* ← button color */
+  box-shadow:0 2px 8px rgba(238,0,0,.35); /* ← glow color */
+}
+```
+
+**Add a new mode:**
+
+1. Add a CSS rule: `body.sr-mode-NEWMODE .sr-left { ... }`
+2. Add a button in the toolbar section
+3. Add the mode to the `classList.remove(...)` call in `apply()`
+4. Add a keyboard shortcut in the `keydown` handler
+
+#### Testing changes
+
+After editing `showroom.yaml`:
+
+```bash
+# Push to git
+git add -A && git commit -m "Update toggle" && git push
+
+# On the cluster: force ArgoCD to refresh and pick up the new commit
+oc annotate application showroom-GUID-user1 -n openshift-gitops \
+  argocd.argoproj.io/refresh=hard --overwrite
+
+# Restart pod to pick up the new ConfigMap
+oc rollout restart deployment/showroom -n showroom-GUID-user1
+
+# Verify the new code is deployed
+oc get configmap showroom-toggle-script -n showroom-GUID-user1 \
+  -o jsonpath='{.data.showroom-toggle\.js}' | head -5
+```
+
+Then hard-refresh the browser (`Ctrl+Shift+R`) to bypass cache.
+
+### Modifying the Webhook
+
+The webhook Python script is in `components/ocp-console-embed/templates/webhook-script.yaml`.
+
+It only targets `Route/oauth-openshift` in `openshift-authentication`. All other routes pass through unchanged.
+
+The JSON patch it applies:
+
+```json
+[
+  {"op": "replace", "path": "/spec/tls/termination", "value": "reencrypt"},
+  {"op": "add", "path": "/spec/tls/insecureEdgeTerminationPolicy", "value": "Redirect"},
+  {"op": "add", "path": "/spec/tls/destinationCACertificate", "value": "<service-ca-cert>"}
+]
+```
+
+The webhook has `failurePolicy: Ignore`, so if the pod crashes, the auth operator writes `passthrough` normally and OAuth still works -- just not inside an iframe until the pod recovers.
+
+### Modifying the CSP (Content-Security-Policy)
+
+The Job (`components/ocp-console-embed/templates/job.yaml`) builds the CSP `frame-ancestors` directive. It only allows the specific Showroom route URLs -- not all `*.DOMAIN` routes.
+
+```bash
+# For 3 users, the CSP looks like:
+frame-ancestors 'self' https://showroom-showroom-GUID-user1.DOMAIN https://showroom-showroom-GUID-user2.DOMAIN https://showroom-showroom-GUID-user3.DOMAIN
+```
+
+To allow additional origins (e.g. a custom dashboard), edit the `ALLOWED_ORIGINS` variable in `job.yaml`.
+
+### Modifying the RHDP Portal Info
+
+The userinfo ConfigMap in `templates/userinfo.yaml` controls what appears in the RHDP portal (demo.redhat.com). It sets:
+
+- `openshift_cluster_console_url` -- console link
+- `lab_ui_url` -- Showroom link (shown to the user)
+- `users_json` -- per-user URLs for multi-user mode
+
+The `ocp4_workload_gitops_bootstrap` role discovers ConfigMaps with the `demo.redhat.com/userinfo` label and reports the data to Babylon.
+
+### Adding a New Tab
+
+Tabs can be added in two places:
+
+1. **Helm values** (this repo or AgnosticV catalog) -- takes precedence:
+
+```yaml
+showroom:
+  tabs:
+    - name: My Service
+      url: "https://my-service.${DOMAIN}"
+```
+
+2. **Content repo** (`ui-config.yml`) -- used when no tabs in Helm values
+
+`${DOMAIN}` is replaced at runtime by the Showroom content container with the actual cluster domain.
+
+### Adding a New Component
+
+To add a new ArgoCD-managed component (e.g. a custom operator):
+
+1. Create `components/my-component/` with `Chart.yaml`, `values.yaml`, and `templates/`
+2. Add the component toggle in `showroom/helm/values.yaml`:
+
+```yaml
+components:
+  myComponent:
+    enabled: true
+    path: showroom/helm/components/my-component
+```
+
+3. Add an ArgoCD Application in `templates/applications.yaml` (copy the `ocpConsoleEmbed` block as a template)
+
+### Clearing User State
+
+If the toggle gets stuck in a bad state, clear localStorage in the browser console:
+
+```javascript
+localStorage.removeItem('sr-panel-mode');
+localStorage.removeItem('sr-hint-dismissed');
+```
+
+Or use an incognito window.
