@@ -57,7 +57,6 @@ data:
        */
       var HASH_KEY = 'view';
       var STORE_KEY = 'sr-panel-mode';
-      var WIDTHS_KEY = 'sr-split-widths';
       var DEFAULT_MODE = '{{ .Values.showroom.panelMode | default "instructions" }}';
       var MAX_RETRIES = 30;
       var retries = 0;
@@ -175,19 +174,14 @@ data:
 
         var mode = 'split';
 
-        /* ── save/restore split widths ────────────────────── */
-        function saveSplitWidths() {
-          try {
-            var lw = left.style.width || left.getBoundingClientRect().width + 'px';
-            var rw = right.style.width || right.getBoundingClientRect().width + 'px';
-            localStorage.setItem(WIDTHS_KEY, JSON.stringify({ l: lw, r: rw }));
-          } catch (e) {}
-        }
-        function getSavedWidths() {
-          try {
-            var s = localStorage.getItem(WIDTHS_KEY);
-            return s ? JSON.parse(s) : null;
-          } catch (e) { return null; }
+        /* ── save/restore Split.js inline styles ─────────── */
+        /* Capture Split.js's initial style attributes before we touch anything */
+        var splitLeftStyle = left.getAttribute('style') || '';
+        var splitRightStyle = right.getAttribute('style') || '';
+
+        function saveSplitStyles() {
+          splitLeftStyle = left.getAttribute('style') || '';
+          splitRightStyle = right.getAttribute('style') || '';
         }
 
         /* ── panel manipulation ───────────────────────────── */
@@ -197,25 +191,21 @@ data:
           btnC.classList.toggle('sr-active', mode === 'tabs');
 
           if (mode === 'split') {
+            /* Restore Split.js's exact inline styles */
+            left.setAttribute('style', splitLeftStyle);
+            right.setAttribute('style', splitRightStyle);
             gutter.style.display = '';
-            var w = getSavedWidths();
-            if (w) {
-              left.style.cssText = 'width:' + w.l + '!important';
-              right.style.cssText = 'width:' + w.r + '!important';
-            } else {
-              left.style.cssText = '';
-              right.style.cssText = '';
-            }
             setTimeout(function () {
               window.dispatchEvent(new Event('resize'));
             }, 50);
           } else if (mode === 'tabs') {
-            saveSplitWidths();
+            /* Save split styles only if coming from split */
+            if (gutter.style.display !== 'none') saveSplitStyles();
             left.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
             gutter.style.display = 'none';
             right.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
           } else if (mode === 'instructions') {
-            saveSplitWidths();
+            if (gutter.style.display !== 'none') saveSplitStyles();
             right.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
             gutter.style.display = 'none';
             left.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
@@ -226,12 +216,9 @@ data:
 
         function setMode(m) { mode = m; apply(); }
 
-        /* Save widths when user drags the gutter in split mode */
-        gutter.addEventListener('mouseup', function () {
-          setTimeout(saveSplitWidths, 100);
-        });
+        /* Update saved styles when user drags the gutter */
         document.addEventListener('mouseup', function () {
-          if (mode === 'split') setTimeout(saveSplitWidths, 100);
+          if (mode === 'split') setTimeout(saveSplitStyles, 100);
         });
 
         /* ── button clicks ────────────────────────────────── */
