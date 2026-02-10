@@ -43,17 +43,33 @@ data:
       /*
        * Showroom panel mode switcher.
        *
-       * A floating toolbar at the bottom-center lets users switch between:
+       * Toolbar at the top-right lets users switch between:
        *   "instructions" – lab guide full-width (read the step)
        *   "split"        – both panes side by side
-       *   "console"      – console/tabs full-width (do the task)
+       *   "tabs"         – tabs/console full-width (do the task)
        *
-       * Keyboard: Ctrl+1 = instructions, Ctrl+2 = split, Ctrl+3 = console
+       * View is stored in URL hash (#view=...) for sharing/bookmarking.
+       * Split widths are saved so resize → tabs → split restores correctly.
+       *
+       * Keyboard: Ctrl+1 = instructions, Ctrl+2 = split, Ctrl+3 = tabs
+       * (only works when parent page has focus; cross-origin iframes
+       *  block key events — hover toolbar to refocus parent)
        */
+      var HASH_KEY = 'view';
       var STORE_KEY = 'sr-panel-mode';
+      var WIDTHS_KEY = 'sr-split-widths';
       var DEFAULT_MODE = '{{ .Values.showroom.panelMode | default "instructions" }}';
       var MAX_RETRIES = 30;
       var retries = 0;
+
+      /* ── URL hash helpers ──────────────────────────────── */
+      function getHashParam() {
+        var m = location.hash.match(/[#&]view=(instructions|split|tabs)/);
+        return m ? m[1] : null;
+      }
+      function setHashParam(v) {
+        history.replaceState(null, '', '#' + HASH_KEY + '=' + v);
+      }
 
       function init() {
         var gutter = document.querySelector('.gutter.gutter-horizontal')
@@ -71,44 +87,44 @@ data:
         /* ── styles ───────────────────────────────────────── */
         var css = document.createElement('style');
         css.textContent = [
-          /* Floating toolbar */
+          /* Toolbar — top-right, inline with header */
           '.sr-toolbar{',
-          '  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);',
+          '  position:fixed;top:8px;right:12px;',
           '  z-index:99999;display:flex;align-items:center;gap:0;',
-          '  background:#1a1a1a;border-radius:10px;',
-          '  box-shadow:0 4px 20px rgba(0,0,0,.3),0 0 0 1px rgba(255,255,255,.08);',
-          '  padding:4px;',
+          '  background:#1a1a1a;border-radius:8px;',
+          '  box-shadow:0 2px 12px rgba(0,0,0,.25),0 0 0 1px rgba(255,255,255,.08);',
+          '  padding:3px;',
           '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
           '}',
-          /* Individual mode buttons */
+          /* Mode buttons */
           '.sr-mode-btn{',
           '  display:flex;align-items:center;gap:6px;',
-          '  padding:8px 16px;border:none;border-radius:7px;',
+          '  padding:7px 14px;border:none;border-radius:6px;',
           '  cursor:pointer;font-size:13px;font-weight:500;',
           '  color:#999;background:transparent;',
           '  transition:all .2s ease;white-space:nowrap;',
           '  line-height:1;',
           '}',
-          '.sr-mode-btn:hover{color:#fff;background:rgba(255,255,255,.08)}',
+          '.sr-mode-btn:hover{color:#fff;background:rgba(255,255,255,.1)}',
           '.sr-mode-btn.sr-active{',
           '  color:#fff;background:#ee0000;',
-          '  box-shadow:0 2px 8px rgba(238,0,0,.4);',
+          '  box-shadow:0 2px 8px rgba(238,0,0,.35);',
           '}',
-          '.sr-mode-btn svg{width:16px;height:16px;fill:currentColor;flex-shrink:0}',
-          /* Separator between buttons */
-          '.sr-sep{width:1px;height:20px;background:rgba(255,255,255,.12);flex-shrink:0}',
-          /* Hint tooltip on first visit */
+          '.sr-mode-btn svg{width:15px;height:15px;fill:currentColor;flex-shrink:0}',
+          /* Separator */
+          '.sr-sep{width:1px;height:18px;background:rgba(255,255,255,.12);flex-shrink:0}',
+          /* First-visit hint */
           '.sr-hint{',
-          '  position:fixed;bottom:72px;left:50%;transform:translateX(-50%);',
+          '  position:fixed;top:48px;right:12px;',
           '  z-index:99999;background:#1a1a1a;color:#ccc;',
           '  font-size:12px;padding:8px 14px;border-radius:8px;',
           '  box-shadow:0 4px 16px rgba(0,0,0,.3);',
           '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
           '  white-space:nowrap;opacity:1;transition:opacity .5s;pointer-events:none;',
           '}',
-          '.sr-hint::after{',
-          '  content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);',
-          '  border:6px solid transparent;border-top-color:#1a1a1a;',
+          '.sr-hint::before{',
+          '  content:"";position:absolute;bottom:100%;right:24px;',
+          '  border:6px solid transparent;border-bottom-color:#1a1a1a;',
           '}',
         ].join('\n');
         document.head.appendChild(css);
@@ -116,7 +132,7 @@ data:
         /* ── SVG icons ────────────────────────────────────── */
         var icoDoc = '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/></svg>';
         var icoSplit = '<svg viewBox="0 0 24 24"><path d="M3 3h8v18H3V3zm10 0h8v18h-8V3zM5 5v14h4V5H5zm10 0v14h4V5h-4z"/></svg>';
-        var icoMon = '<svg viewBox="0 0 24 24"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>';
+        var icoTabs = '<svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h10v4h8v10zM15 5h2v2h-2V5zm4 0h2v2h-2V5z"/></svg>';
 
         /* ── build toolbar ────────────────────────────────── */
         var toolbar = document.createElement('div');
@@ -142,9 +158,9 @@ data:
 
         var btnC = document.createElement('button');
         btnC.className = 'sr-mode-btn';
-        btnC.innerHTML = icoMon + '<span>Console</span>';
-        btnC.title = 'Full-width console (Ctrl+3)';
-        btnC.setAttribute('data-mode', 'console');
+        btnC.innerHTML = icoTabs + '<span>Tabs</span>';
+        btnC.title = 'Full-width tabs (Ctrl+3)';
+        btnC.setAttribute('data-mode', 'tabs');
 
         toolbar.appendChild(btnI);
         toolbar.appendChild(sep1);
@@ -153,37 +169,70 @@ data:
         toolbar.appendChild(btnC);
         document.body.appendChild(toolbar);
 
-        var buttons = { instructions: btnI, split: btnS, console: btnC };
+        /* Hovering toolbar refocuses parent so keyboard shortcuts work
+           even after clicking inside a cross-origin iframe */
+        toolbar.addEventListener('mouseenter', function () { window.focus(); });
+
         var mode = 'split';
+
+        /* ── save/restore split widths ────────────────────── */
+        function saveSplitWidths() {
+          try {
+            var lw = left.style.width || left.getBoundingClientRect().width + 'px';
+            var rw = right.style.width || right.getBoundingClientRect().width + 'px';
+            localStorage.setItem(WIDTHS_KEY, JSON.stringify({ l: lw, r: rw }));
+          } catch (e) {}
+        }
+        function getSavedWidths() {
+          try {
+            var s = localStorage.getItem(WIDTHS_KEY);
+            return s ? JSON.parse(s) : null;
+          } catch (e) { return null; }
+        }
 
         /* ── panel manipulation ───────────────────────────── */
         function apply() {
-          /* Update button highlights */
           btnI.classList.toggle('sr-active', mode === 'instructions');
           btnS.classList.toggle('sr-active', mode === 'split');
-          btnC.classList.toggle('sr-active', mode === 'console');
+          btnC.classList.toggle('sr-active', mode === 'tabs');
 
           if (mode === 'split') {
-            left.style.cssText = '';
-            right.style.cssText = '';
             gutter.style.display = '';
-            /* Let Split.js recalculate */
+            var w = getSavedWidths();
+            if (w) {
+              left.style.cssText = 'width:' + w.l + '!important';
+              right.style.cssText = 'width:' + w.r + '!important';
+            } else {
+              left.style.cssText = '';
+              right.style.cssText = '';
+            }
             setTimeout(function () {
               window.dispatchEvent(new Event('resize'));
             }, 50);
-          } else if (mode === 'console') {
+          } else if (mode === 'tabs') {
+            saveSplitWidths();
             left.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
             gutter.style.display = 'none';
             right.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
           } else if (mode === 'instructions') {
+            saveSplitWidths();
             right.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
             gutter.style.display = 'none';
             left.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
           }
+          setHashParam(mode);
           try { localStorage.setItem(STORE_KEY, mode); } catch (e) {}
         }
 
         function setMode(m) { mode = m; apply(); }
+
+        /* Save widths when user drags the gutter in split mode */
+        gutter.addEventListener('mouseup', function () {
+          setTimeout(saveSplitWidths, 100);
+        });
+        document.addEventListener('mouseup', function () {
+          if (mode === 'split') setTimeout(saveSplitWidths, 100);
+        });
 
         /* ── button clicks ────────────────────────────────── */
         toolbar.addEventListener('click', function (e) {
@@ -198,7 +247,13 @@ data:
           if (!e.ctrlKey) return;
           if (e.key === '1') { e.preventDefault(); setMode('instructions'); }
           if (e.key === '2') { e.preventDefault(); setMode('split'); }
-          if (e.key === '3') { e.preventDefault(); setMode('console'); }
+          if (e.key === '3') { e.preventDefault(); setMode('tabs'); }
+        });
+
+        /* ── handle hash changes (back/forward navigation) ── */
+        window.addEventListener('hashchange', function () {
+          var h = getHashParam();
+          if (h && h !== mode) setMode(h);
         });
 
         /* ── first-visit hint ─────────────────────────────── */
@@ -207,21 +262,24 @@ data:
           if (!localStorage.getItem(hintKey)) {
             var hint = document.createElement('div');
             hint.className = 'sr-hint';
-            hint.textContent = 'Use the toolbar below to switch views \u2022 Ctrl+1 / Ctrl+2 / Ctrl+3';
+            hint.textContent = 'Switch views with the toolbar above \u2022 Ctrl+1 / Ctrl+2 / Ctrl+3';
             document.body.appendChild(hint);
             localStorage.setItem(hintKey, '1');
             setTimeout(function () {
               hint.style.opacity = '0';
               setTimeout(function () { hint.remove(); }, 600);
-            }, 6000);
+            }, 8000);
           }
         } catch (e) {}
 
-        /* ── restore saved mode ───────────────────────────── */
+        /* ── restore mode: URL hash > localStorage > default ── */
         try {
-          var saved = localStorage.getItem(STORE_KEY);
-          if (saved === 'console' || saved === 'instructions' || saved === 'split') {
-            mode = saved;
+          var fromHash = getHashParam();
+          var fromStore = localStorage.getItem(STORE_KEY);
+          if (fromHash) {
+            mode = fromHash;
+          } else if (fromStore === 'tabs' || fromStore === 'instructions' || fromStore === 'split') {
+            mode = fromStore;
           } else {
             mode = DEFAULT_MODE;
           }
