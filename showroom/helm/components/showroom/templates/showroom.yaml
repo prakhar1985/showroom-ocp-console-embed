@@ -125,6 +125,13 @@ data:
           '  content:"";position:absolute;bottom:100%;right:24px;',
           '  border:6px solid transparent;border-bottom-color:#1a1a1a;',
           '}',
+          /* Mode overrides — CSS !important beats Split.js inline styles */
+          'body.sr-mode-instructions .sr-right,',
+          'body.sr-mode-instructions .sr-gutter{display:none!important}',
+          'body.sr-mode-instructions .sr-left{width:100%!important;max-width:100%!important}',
+          'body.sr-mode-tabs .sr-left,',
+          'body.sr-mode-tabs .sr-gutter{display:none!important}',
+          'body.sr-mode-tabs .sr-right{width:100%!important;max-width:100%!important}',
         ].join('\n');
         document.head.appendChild(css);
 
@@ -174,52 +181,36 @@ data:
 
         var mode = 'split';
 
-        /* ── save/restore Split.js inline styles ─────────── */
-        /* Capture Split.js's initial style attributes before we touch anything */
-        var splitLeftStyle = left.getAttribute('style') || '';
-        var splitRightStyle = right.getAttribute('style') || '';
-
-        function saveSplitStyles() {
-          splitLeftStyle = left.getAttribute('style') || '';
-          splitRightStyle = right.getAttribute('style') || '';
-        }
+        /* ── Tag panes so CSS can target them ────────────── */
+        left.classList.add('sr-left');
+        right.classList.add('sr-right');
+        gutter.classList.add('sr-gutter');
 
         /* ── panel manipulation ───────────────────────────── */
+        /* Uses CSS classes on <body> instead of touching inline styles.
+           Split.js's inline widths are NEVER modified, so switching
+           back to split always restores the correct widths. */
         function apply() {
           btnI.classList.toggle('sr-active', mode === 'instructions');
           btnS.classList.toggle('sr-active', mode === 'split');
           btnC.classList.toggle('sr-active', mode === 'tabs');
 
-          if (mode === 'split') {
-            /* Restore Split.js's exact inline styles */
-            left.setAttribute('style', splitLeftStyle);
-            right.setAttribute('style', splitRightStyle);
-            gutter.style.display = '';
+          document.body.classList.remove('sr-mode-instructions', 'sr-mode-tabs');
+          if (mode === 'instructions') {
+            document.body.classList.add('sr-mode-instructions');
+          } else if (mode === 'tabs') {
+            document.body.classList.add('sr-mode-tabs');
+          } else {
+            /* split — just let Split.js's inline styles take over */
             setTimeout(function () {
               window.dispatchEvent(new Event('resize'));
             }, 50);
-          } else if (mode === 'tabs') {
-            /* Save split styles only if coming from split */
-            if (gutter.style.display !== 'none') saveSplitStyles();
-            left.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
-            gutter.style.display = 'none';
-            right.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
-          } else if (mode === 'instructions') {
-            if (gutter.style.display !== 'none') saveSplitStyles();
-            right.style.cssText = 'display:none!important;width:0!important;flex-basis:0!important;min-width:0!important;overflow:hidden!important';
-            gutter.style.display = 'none';
-            left.style.cssText = 'display:block;width:100%!important;flex-basis:100%!important;max-width:100%!important';
           }
           setHashParam(mode);
           try { localStorage.setItem(STORE_KEY, mode); } catch (e) {}
         }
 
         function setMode(m) { mode = m; apply(); }
-
-        /* Update saved styles when user drags the gutter */
-        document.addEventListener('mouseup', function () {
-          if (mode === 'split') setTimeout(saveSplitStyles, 100);
-        });
 
         /* ── button clicks ────────────────────────────────── */
         toolbar.addEventListener('click', function (e) {
