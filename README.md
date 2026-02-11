@@ -1,6 +1,6 @@
 # Showroom OCP Console Embed (GitOps)
 
-Embeds the OpenShift Console inside Showroom as an iframe tab -- deployed via ArgoCD, with all cluster operators fully Managed and no security compromises.
+Embeds the OpenShift Console inside Showroom as an iframe tab -- deployed via ArgoCD, with all cluster operators fully Managed.
 
 ## TL;DR
 
